@@ -1,10 +1,66 @@
 import { Octokit } from '@octokit/rest'
-import type { AiReviewResult } from './llm.js'
+import type { AiFinding, AiReviewResult } from './llm.js'
 
-type InlineComment = {
-  path: string
-  line: number
-  body: string
+/** Shown in collapsed summary lines on GitHub (also used for search/filter). */
+export const AI_REVIEW_TAG = '#AI review'
+
+export const AI_REVIEW_OVERVIEW_SUMMARY = `${AI_REVIEW_TAG} — Overview for reviewer`
+export const AI_REVIEW_CODE_SUMMARY = `${AI_REVIEW_TAG} — Code review`
+
+function collapseBlock(summary: string, body: string): string {
+  return `<details>\n<summary>${summary}</summary>\n\n${body}\n</details>`
+}
+
+function formatOverviewBlock(overview: AiReviewResult['overview']): string {
+  const parts: string[] = []
+
+  if (overview.whatChanged) {
+    parts.push('## What changed', overview.whatChanged)
+  }
+  if (overview.affectedAreas.length > 0) {
+    parts.push('## Affected areas', ...overview.affectedAreas.map((a) => `- ${a}`))
+  }
+  if (overview.focusForReviewer) {
+    parts.push('## Focus for reviewer', overview.focusForReviewer)
+  }
+  if (overview.priorityReview.length > 0) {
+    parts.push('## Priority review', ...overview.priorityReview.map((p) => `- ${p}`))
+  }
+  if (overview.checklist.length > 0) {
+    parts.push('## Reviewer checklist', ...overview.checklist.map((c) => `- [ ] ${c}`))
+  }
+
+  return parts.join('\n\n') || 'No overview generated.'
+}
+
+function formatCodeReviewBlock(findings: AiFinding[]): string {
+  if (findings.length === 0) return 'No issues reported.'
+
+  const parts: string[] = []
+  const byPath = new Map<string, AiFinding[]>()
+  for (const f of findings) {
+    const list = byPath.get(f.path) ?? []
+    list.push(f)
+    byPath.set(f.path, list)
+  }
+
+  for (const path of [...byPath.keys()].sort()) {
+    const items = byPath.get(path)!
+    parts.push(`### \`${path}\``)
+    for (const f of items) {
+      parts.push(`- **${f.severity}**: ${f.comment}`)
+    }
+  }
+
+  return parts.join('\n\n')
+}
+
+export function formatReviewBody(ai: AiReviewResult): string {
+  const overviewBody = formatOverviewBlock(ai.overview)
+  const codeBody = formatCodeReviewBlock(ai.findings)
+  return [collapseBlock(AI_REVIEW_OVERVIEW_SUMMARY, overviewBody), collapseBlock(AI_REVIEW_CODE_SUMMARY, codeBody)].join(
+    '\n\n',
+  )
 }
 
 export async function submitGithubReview(
@@ -15,53 +71,12 @@ export async function submitGithubReview(
   commitId: string,
   ai: AiReviewResult,
 ): Promise<void> {
-  const inlineCandidates: InlineComment[] = []
-  for (const f of ai.findings) {
-    if (f.line != null && Number.isInteger(f.line) && f.line > 0) {
-      inlineCandidates.push({
-        path: f.path,
-        line: f.line,
-        body: `**${f.severity}**: ${f.comment}`,
-      })
-    }
-  }
-  const bodyParts = [ai.summary]
-  for (const f of ai.findings) {
-    if (f.line == null) {
-      bodyParts.push(`- **${f.path}** (${f.severity}): ${f.comment}`)
-    }
-  }
-  const body = bodyParts.filter(Boolean).join('\n\n') || 'No issues reported.'
-
-  const maxInline = 20
-  const inline = inlineCandidates.slice(0, maxInline)
-
-  const base = {
+  await octokit.pulls.createReview({
     owner,
     repo,
     pull_number: pullNumber,
     commit_id: commitId,
-    body,
-    event: 'COMMENT' as const,
-  }
-
-  if (inline.length === 0) {
-    await octokit.pulls.createReview(base)
-    return
-  }
-
-  try {
-    await octokit.pulls.createReview({
-      ...base,
-      comments: inline.map((c) => ({
-        path: c.path,
-        line: c.line,
-        side: 'RIGHT' as const,
-        body: c.body,
-      })),
-    })
-  } catch (e) {
-    console.warn('Inline review failed; falling back to summary-only', e)
-    await octokit.pulls.createReview(base)
-  }
+    body: formatReviewBody(ai),
+    event: 'COMMENT',
+  })
 }

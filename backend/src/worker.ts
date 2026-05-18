@@ -2,9 +2,9 @@ import { Worker } from 'bullmq'
 import { Octokit } from '@octokit/rest'
 import { prisma } from './db.js'
 import { PR_REVIEW_QUEUE, redisConnection, type ReviewJobData } from './queue.js'
-import { normalizeAiFindings } from './lib/diff-lines.js'
+import { normalizeFindingPaths } from './lib/diff-lines.js'
 import { buildPrDiffText } from './lib/pr-diff.js'
-import { runLlmReview } from './lib/llm.js'
+import { runLlmCodeReview, runLlmOverview } from './lib/llm.js'
 import { submitGithubReview } from './lib/review-submit.js'
 import { workerLog, shortSha } from './lib/logger.js'
 
@@ -54,7 +54,7 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
 
   step('fetch_diff', { excludeGlobCount: excludeGlobs.length })
   const diffStarted = Date.now()
-  const { diffText, headSha, validLinesByPath } = await buildPrDiffText(
+  const { diffText, headSha, changedPaths } = await buildPrDiffText(
     octokit,
     repo.owner,
     repo.name,
@@ -79,32 +79,47 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
     throw new Error('OPENAI_API_KEY is not set (for a local OpenAI-compatible server set OPENAI_BASE_URL)')
   }
 
-  step('llm_review', { model: rules.model, hasOpenAiBaseUrl: Boolean(baseUrl) })
-  const llmStarted = Date.now()
   const userContent = `Repository: ${repo.owner}/${repo.name}\nPR: #${log.prNumber}\n\n${diffText}`
-  const aiRaw = await runLlmReview(apiKey, rules.model, rules.systemPrompt, userContent)
-  const { result: ai, stats: lineStats } = normalizeAiFindings(aiRaw, validLinesByPath)
-  if (lineStats.snapped > 0 || lineStats.droppedLine > 0 || lineStats.pathUnresolved > 0) {
-    workerLog.info(
-      {
-        event: 'review_lines_normalized',
-        reviewLogId,
-        jobId: jobId ?? null,
-        ...lineStats,
-      },
-      'LLM line numbers adjusted to diff',
-    )
-  }
+
+  step('llm_overview', { model: rules.model, hasOpenAiBaseUrl: Boolean(baseUrl) })
+  const overviewStarted = Date.now()
+  const overview = await runLlmOverview(apiKey, rules.model, rules.systemPrompt, userContent)
+  workerLog.info(
+    {
+      event: 'review_llm_overview_done',
+      reviewLogId,
+      jobId: jobId ?? null,
+      ms: Date.now() - overviewStarted,
+    },
+    'LLM overview phase done',
+  )
+
+  step('llm_code_review', { model: rules.model })
+  const codeReviewStarted = Date.now()
+  const findings = await runLlmCodeReview(apiKey, rules.model, rules.systemPrompt, userContent)
+  workerLog.info(
+    {
+      event: 'review_llm_code_review_done',
+      reviewLogId,
+      jobId: jobId ?? null,
+      ms: Date.now() - codeReviewStarted,
+      findingCount: findings.length,
+    },
+    'LLM code review phase done',
+  )
+
+  const ai = normalizeFindingPaths({ overview, findings }, changedPaths)
   const rawOut = JSON.stringify(ai)
   workerLog.info(
     {
       event: 'review_llm_done',
       reviewLogId,
       jobId: jobId ?? null,
-      ms: Date.now() - llmStarted,
+      msOverview: Date.now() - overviewStarted,
+      msCodeReview: Date.now() - codeReviewStarted,
       outputChars: rawOut.length,
     },
-    'LLM response received',
+    'LLM review phases completed',
   )
 
   step('submit_github_review')
