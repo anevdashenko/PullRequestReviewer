@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Repository {
+  id            String       @id @default(cuid())
+  provider      String       @default("github")
+  owner         String
+  name          String
+  webhookSecret String
+  accessToken   String
+  createdAt     DateTime     @default(now())
+  rules         ReviewRule?
+  reviewLogs    ReviewLog[]
+
+  @@unique([provider, owner, name])
+}
+
+model ReviewRule {
+  id           String     @id @default(cuid())
+  repoId       String     @unique
+  repository   Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  systemPrompt String     @db.Text
+  excludeGlobs Json       @default("[]")
+  model        String     @default("gpt-4o-mini")
+}
+
+model ReviewLog {
+  id           String     @id @default(cuid())
+  repoId       String
+  repository   Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  prNumber     Int
+  commitSha    String?
+  status       String
+  errorMessage String?    @db.Text
+  rawAiOutput  String?    @db.Text
+  createdAt    DateTime   @default(now())
+  finishedAt   DateTime?
+
+  @@index([repoId, createdAt])
+}

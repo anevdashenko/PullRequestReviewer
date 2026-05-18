@@ -1,0 +1,132 @@
+:root {
+  font-family: system-ui, Segoe UI, sans-serif;
+  line-height: 1.5;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: #2563eb;
+}
+
+code {
+  font-size: 0.85em;
+  background: #e2e8f0;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.app-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem 1.25rem 3rem;
+}
+
+nav {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+nav a {
+  text-decoration: none;
+  font-weight: 600;
+}
+
+nav a.active {
+  text-decoration: underline;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+input,
+textarea,
+button {
+  font: inherit;
+}
+
+input[type='text'],
+input[type='password'],
+textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+}
+
+textarea {
+  min-height: 140px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9rem;
+}
+
+button {
+  padding: 0.45rem 1rem;
+  border-radius: 6px;
+  border: 1px solid #1e293b;
+  background: #1e293b;
+  color: #fff;
+  cursor: pointer;
+  margin-top: 0.75rem;
+}
+
+button.secondary {
+  background: #fff;
+  color: #1e293b;
+}
+
+button.danger {
+  background: #b91c1c;
+  border-color: #991b1b;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.4rem;
+  border-bottom: 1px solid #e2e8f0;
+  vertical-align: top;
+}
+
+.error {
+  color: #b91c1c;
+  white-space: pre-wrap;
+}
+
+.success {
+  color: #15803d;
+}
+
+.mono {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
