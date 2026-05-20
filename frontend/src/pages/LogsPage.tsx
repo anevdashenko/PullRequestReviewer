@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api'
+import { mrUrl } from '../lib/repo-urls'
 
 type LogRow = {
   id: string
@@ -12,7 +13,7 @@ type LogRow = {
   rawAiOutput: string | null
   createdAt: string
   finishedAt: string | null
-  repository?: { owner: string; name: string }
+  repository?: { owner: string; name: string; provider?: string }
 }
 
 export default function LogsPage() {
@@ -57,7 +58,7 @@ export default function LogsPage() {
                 const slug = r.repository ? `${r.repository.owner}/${r.repository.name}` : r.repoId
                 const prUrl =
                   r.repository &&
-                  `https://github.com/${r.repository.owner}/${r.repository.name}/pull/${r.prNumber}`
+                  mrUrl(r.repository.provider ?? 'github', r.repository.owner, r.repository.name, r.prNumber)
                 return (
                   <tr key={r.id}>
                     <td className="mono">{new Date(r.createdAt).toLocaleString()}</td>

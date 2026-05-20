@@ -14,6 +14,9 @@ export default function Layout() {
         <NavLink to="/logs" className={({ isActive }) => (isActive ? 'active' : '')}>
           Review logs
         </NavLink>
+        <NavLink to="/commit-reviews" className={({ isActive }) => (isActive ? 'active' : '')}>
+          Commit reviews
+        </NavLink>
         <span style={{ flex: 1 }} />
         <label style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontWeight: 600 }}>Admin key</span>

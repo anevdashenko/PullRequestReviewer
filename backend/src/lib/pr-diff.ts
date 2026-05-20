@@ -1,7 +1,6 @@
 import { Octokit } from '@octokit/rest'
 import { minimatch } from 'minimatch'
-
-const MAX_CHARS = 120_000
+import { DIFF_MAX_CHARS } from './defaults.js'
 
 export async function buildPrDiffText(
   octokit: Octokit,
@@ -28,7 +27,7 @@ export async function buildPrDiffText(
     if (!patch && f.status !== 'added' && f.status !== 'removed') continue
     changedPaths.push(f.filename)
     out += `\n## ${f.filename} (${f.status})\n${patch || '(no patch)'}\n`
-    if (out.length > MAX_CHARS) {
+    if (out.length > DIFF_MAX_CHARS) {
       out += '\n\n[TRUNCATED: diff exceeded character limit]\n'
       break
     }

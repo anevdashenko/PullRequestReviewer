@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
+import { normalizeProvider, webhookPath, type RepoProvider } from '../lib/repo-urls'
 
 const DEFAULT_MODEL = 'qwen2.5-coder-7b-instruct'
 
@@ -10,6 +11,8 @@ type RepoRow = {
   owner: string
   name: string
   createdAt: string
+  prReviewEnabled: boolean
+  commitReviewEnabled: boolean
   hasRules: boolean
   model: string | null
 }
@@ -17,18 +20,25 @@ type RepoRow = {
 export default function ReposPage() {
   const [rows, setRows] = useState<RepoRow[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [form, setForm] = useState({
+  const initialForm = () => ({
+    provider: 'github' as RepoProvider,
     owner: '',
     name: '',
     accessToken: '',
     webhookSecret: '',
     model: DEFAULT_MODEL,
+    prReviewEnabled: true,
+    commitReviewEnabled: false,
   })
+  const [form, setForm] = useState(initialForm())
   const [busy, setBusy] = useState(false)
   const [modelEdits, setModelEdits] = useState<Record<string, string>>({})
   const [savingModelId, setSavingModelId] = useState<string | null>(null)
+  const [togglingPrId, setTogglingPrId] = useState<string | null>(null)
+  const [togglingCommitId, setTogglingCommitId] = useState<string | null>(null)
   const apiPublicBase = import.meta.env.VITE_PUBLIC_API_URL ?? 'http://localhost:3000'
-  const webhookUrl = `${apiPublicBase.replace(/\/$/, '')}/webhooks/github`
+  const webhookUrl = `${apiPublicBase.replace(/\/$/, '')}${webhookPath(form.provider)}`
+  const isGitlab = form.provider === 'gitlab'
 
   const load = () => {
     setError(null)
@@ -46,14 +56,11 @@ export default function ReposPage() {
     setBusy(true)
     setError(null)
     try {
-      let formBody = JSON.stringify(form);
-      console.log("Send form for add ", formBody);
-      
       await api<{ id: string }>('/api/repos', {
         method: 'POST',
-        body: formBody,
+        body: JSON.stringify(form),
       })
-      setForm({ owner: '', name: '', accessToken: '', webhookSecret: '', model: DEFAULT_MODEL })
+      setForm(initialForm())
       load()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -87,6 +94,38 @@ export default function ReposPage() {
     }
   }
 
+  const togglePrReview = async (id: string, enabled: boolean) => {
+    setTogglingPrId(id)
+    setError(null)
+    try {
+      await api(`/api/repos/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ prReviewEnabled: enabled }),
+      })
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setTogglingPrId(null)
+    }
+  }
+
+  const toggleCommitReview = async (id: string, enabled: boolean) => {
+    setTogglingCommitId(id)
+    setError(null)
+    try {
+      await api(`/api/repos/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ commitReviewEnabled: enabled }),
+      })
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setTogglingCommitId(null)
+    }
+  }
+
   const remove = async (id: string) => {
     if (!confirm('Delete this repository and its logs?')) return
     setError(null)
@@ -102,23 +141,41 @@ export default function ReposPage() {
     <>
       <h1>Repositories</h1>
       <p className="mono" style={{ marginTop: 0 }}>
-        GitHub webhook URL (must reach the API — use ngrok URL in production): <code>{webhookUrl}</code>
+        Webhook URL for <strong>{form.provider}</strong> (must reach the API — use ngrok URL in production):{' '}
+        <code>{webhookUrl}</code>
       </p>
-      <p style={{ fontSize: '0.9rem', color: '#475569' }}>
-        In GitHub: Settings → Webhooks → Add webhook. Content type <strong>application/json</strong>. Events:{' '}
-        <strong>Pull requests</strong>. Secret must match the value stored for this repo.
-      </p>
+      {isGitlab ? (
+        <p style={{ fontSize: '0.9rem', color: '#475569' }}>
+          In GitLab: Project → Settings → Webhooks. URL as above. Enable <strong>Merge request events</strong>.
+          Secret token must match the value stored for this repo.
+        </p>
+      ) : (
+        <p style={{ fontSize: '0.9rem', color: '#475569' }}>
+          In GitHub: Settings → Webhooks → Add webhook. Content type <strong>application/json</strong>. Events:{' '}
+          <strong>Pull requests</strong>. Secret must match the value stored for this repo.
+        </p>
+      )}
 
       {error && <p className="error">{error}</p>}
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Add repository</h2>
         <form onSubmit={add}>
-          <label>Owner (org or user)</label>
+          <label>Provider</label>
+          <select
+            value={form.provider}
+            onChange={(e) => setForm({ ...form, provider: e.target.value as RepoProvider })}
+          >
+            <option value="github">GitHub</option>
+            <option value="gitlab">GitLab</option>
+          </select>
+          <label>{isGitlab ? 'Namespace (group or user)' : 'Owner (org or user)'}</label>
           <input value={form.owner} onChange={(e) => setForm({ ...form, owner: e.target.value })} required />
-          <label>Repository name</label>
+          <label>{isGitlab ? 'Project path (slug)' : 'Repository name'}</label>
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
-          <label>GitHub access token (repo scope)</label>
+          <label>
+            {isGitlab ? 'GitLab Personal Access Token (api, read_repository, write_repository)' : 'GitHub access token (repo scope)'}
+          </label>
           <input
             type="password"
             value={form.accessToken}
@@ -126,7 +183,9 @@ export default function ReposPage() {
             required
             autoComplete="off"
           />
-          <label>Webhook secret (same as in GitHub webhook settings)</label>
+          <label>
+            {isGitlab ? 'Webhook secret token (same as in GitLab webhook settings)' : 'Webhook secret (same as in GitHub webhook settings)'}
+          </label>
           <input
             type="password"
             value={form.webhookSecret}
@@ -141,6 +200,22 @@ export default function ReposPage() {
             placeholder={DEFAULT_MODEL}
             required
           />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 400, marginTop: '0.75rem' }}>
+            <input
+              type="checkbox"
+              checked={form.prReviewEnabled}
+              onChange={(e) => setForm({ ...form, prReviewEnabled: e.target.checked })}
+            />
+            PR / MR review (webhooks and PR poll)
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 400 }}>
+            <input
+              type="checkbox"
+              checked={form.commitReviewEnabled}
+              onChange={(e) => setForm({ ...form, commitReviewEnabled: e.target.checked })}
+            />
+            Commit review (commit poll batches by author)
+          </label>
           <button type="submit" disabled={busy}>
             {busy ? 'Saving…' : 'Add'}
           </button>
@@ -155,7 +230,10 @@ export default function ReposPage() {
           <table>
             <thead>
               <tr>
+                <th>Provider</th>
                 <th>Repo</th>
+                <th>PR / MR review</th>
+                <th>Commit review</th>
                 <th>Model</th>
                 <th>Rules</th>
                 <th />
@@ -164,10 +242,33 @@ export default function ReposPage() {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
+                  <td>{normalizeProvider(r.provider)}</td>
                   <td>
                     <span className="mono">
                       {r.owner}/{r.name}
                     </span>
+                  </td>
+                  <td>
+                    <label style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 400 }}>
+                      <input
+                        type="checkbox"
+                        checked={r.prReviewEnabled}
+                        disabled={togglingPrId === r.id}
+                        onChange={(e) => togglePrReview(r.id, e.target.checked)}
+                      />
+                      {togglingPrId === r.id ? '…' : 'enabled'}
+                    </label>
+                  </td>
+                  <td>
+                    <label style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 400 }}>
+                      <input
+                        type="checkbox"
+                        checked={r.commitReviewEnabled}
+                        disabled={togglingCommitId === r.id}
+                        onChange={(e) => toggleCommitReview(r.id, e.target.checked)}
+                      />
+                      {togglingCommitId === r.id ? '…' : 'enabled'}
+                    </label>
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>

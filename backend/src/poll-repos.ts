@@ -1,7 +1,7 @@
-import { Octokit } from '@octokit/rest'
 import { prisma } from './db.js'
-import { scheduleGithubPrReview } from './lib/schedule-pr-review.js'
+import { schedulePrReview } from './lib/schedule-pr-review.js'
 import { pollLog, shortSha } from './lib/logger.js'
+import { getProvider } from './providers/index.js'
 
 type PollTickStats = {
   reposTotal: number
@@ -23,8 +23,8 @@ async function pollOnce(tickId: string): Promise<PollTickStats> {
   }
 
   const repos = await prisma.repository.findMany({
-    where: { provider: 'github' },
-    select: { id: true, owner: true, name: true, accessToken: true },
+    where: { prReviewEnabled: true },
+    select: { id: true, provider: true, owner: true, name: true, accessToken: true },
   })
 
   stats.reposTotal = repos.length
@@ -34,7 +34,7 @@ async function pollOnce(tickId: string): Promise<PollTickStats> {
   )
 
   if (repos.length === 0) {
-    pollLog.info({ event: 'poll_tick_no_repos', tickId }, 'no github repositories configured — nothing to poll')
+    pollLog.info({ event: 'poll_tick_no_repos', tickId }, 'no PR-review-enabled repositories — nothing to poll')
     return stats
   }
 
@@ -42,91 +42,76 @@ async function pollOnce(tickId: string): Promise<PollTickStats> {
     const repoRef = `${repo.owner}/${repo.name}`
     const repoStarted = Date.now()
     pollLog.info(
-      { event: 'poll_repo_start', tickId, repoId: repo.id, owner: repo.owner, name: repo.name },
-      `polling open PRs for ${repoRef}`,
+      {
+        event: 'poll_repo_start',
+        tickId,
+        repoId: repo.id,
+        provider: repo.provider,
+        owner: repo.owner,
+        name: repo.name,
+      },
+      `polling open MRs for ${repoRef}`,
     )
 
     try {
-      const octokit = new Octokit({ auth: repo.accessToken })
-      let page = 1
-      const perPage = 50
-      let repoPrsSeen = 0
+      const provider = getProvider(repo.provider)
+      const mrs = await provider.listOpenMrs(repo.accessToken, repo.owner, repo.name)
       let repoScheduled = 0
       let repoSkipped = 0
 
-      for (;;) {
-        pollLog.debug(
-          { event: 'poll_github_list', tickId, repoId: repo.id, owner: repo.owner, name: repo.name, page, perPage },
-          `GitHub pulls.list page ${page}`,
-        )
+      pollLog.info(
+        {
+          event: 'poll_mrs_list',
+          tickId,
+          repoId: repo.id,
+          provider: repo.provider,
+          mrCount: mrs.length,
+        },
+        `returned ${mrs.length} open MR(s)`,
+      )
 
-        const { data: pulls } = await octokit.pulls.list({
-          owner: repo.owner,
-          repo: repo.name,
-          state: 'open',
-          per_page: perPage,
-          page,
+      for (const mr of mrs) {
+        stats.prsSeen += 1
+        const result = await schedulePrReview(repo.id, mr.number, mr.headSha, {
+          source: 'poll',
+          tickId,
         })
 
-        pollLog.info(
-          {
-            event: 'poll_github_page',
-            tickId,
-            repoId: repo.id,
-            owner: repo.owner,
-            name: repo.name,
-            page,
-            pullCount: pulls.length,
-          },
-          `GitHub returned ${pulls.length} open PR(s) on page ${page}`,
-        )
-
-        for (const pr of pulls) {
-          repoPrsSeen += 1
-          stats.prsSeen += 1
-          const headSha = pr.head?.sha ?? null
-          const result = await scheduleGithubPrReview(repo.id, pr.number, headSha, {
-            source: 'poll',
-            tickId,
-          })
-
-          if (result.accepted) {
-            repoScheduled += 1
-            stats.scheduled += 1
-            pollLog.info(
-              {
-                event: 'poll_pr_scheduled',
-                tickId,
-                repoId: repo.id,
-                owner: repo.owner,
-                name: repo.name,
-                prNumber: pr.number,
-                headSha: shortSha(headSha),
-                reviewLogId: result.reviewLogId,
-              },
-              `queued review for ${repoRef}#${pr.number}`,
-            )
-          } else {
-            repoSkipped += 1
-            stats.skipped += 1
-            pollLog.info(
-              {
-                event: 'poll_pr_skipped',
-                tickId,
-                repoId: repo.id,
-                owner: repo.owner,
-                name: repo.name,
-                prNumber: pr.number,
-                headSha: shortSha(headSha),
-                reason: result.reason,
-              },
-              `skipped ${repoRef}#${pr.number}: ${result.reason}`,
-            )
-          }
+        if (result.accepted) {
+          repoScheduled += 1
+          stats.scheduled += 1
+          pollLog.info(
+            {
+              event: 'poll_pr_scheduled',
+              tickId,
+              repoId: repo.id,
+              provider: repo.provider,
+              owner: repo.owner,
+              name: repo.name,
+              prNumber: mr.number,
+              headSha: shortSha(mr.headSha),
+              reviewLogId: result.reviewLogId,
+            },
+            `queued review for ${repoRef}#${mr.number}`,
+          )
+        } else {
+          repoSkipped += 1
+          stats.skipped += 1
+          pollLog.info(
+            {
+              event: 'poll_pr_skipped',
+              tickId,
+              repoId: repo.id,
+              provider: repo.provider,
+              owner: repo.owner,
+              name: repo.name,
+              prNumber: mr.number,
+              headSha: shortSha(mr.headSha),
+              reason: result.reason,
+            },
+            `skipped ${repoRef}#${mr.number}: ${result.reason}`,
+          )
         }
-
-        if (pulls.length < perPage) break
-        page += 1
       }
 
       stats.reposOk += 1
@@ -135,10 +120,11 @@ async function pollOnce(tickId: string): Promise<PollTickStats> {
           event: 'poll_repo_done',
           tickId,
           repoId: repo.id,
+          provider: repo.provider,
           owner: repo.owner,
           name: repo.name,
           ms: Date.now() - repoStarted,
-          prsSeen: repoPrsSeen,
+          prsSeen: mrs.length,
           scheduled: repoScheduled,
           skipped: repoSkipped,
         },
@@ -152,6 +138,7 @@ async function pollOnce(tickId: string): Promise<PollTickStats> {
           event: 'poll_repo_error',
           tickId,
           repoId: repo.id,
+          provider: repo.provider,
           owner: repo.owner,
           name: repo.name,
           ms: Date.now() - repoStarted,
@@ -167,7 +154,7 @@ async function pollOnce(tickId: string): Promise<PollTickStats> {
 let tickCounter = 0
 
 /**
- * Periodically lists open GitHub PRs for every configured repository and
+ * Periodically lists open merge requests for every configured repository and
  * enqueues a review when the current head commit has not been reviewed yet.
  * Disabled when PR_POLL_INTERVAL_MS is unset or non-positive.
  */

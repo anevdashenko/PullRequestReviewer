@@ -8,15 +8,19 @@ datasource db {
 }
 
 model Repository {
-  id            String       @id @default(cuid())
-  provider      String       @default("github")
-  owner         String
-  name          String
-  webhookSecret String
-  accessToken   String
-  createdAt     DateTime     @default(now())
-  rules         ReviewRule?
-  reviewLogs    ReviewLog[]
+  id                   String              @id @default(cuid())
+  provider             String              @default("github")
+  owner                String
+  name                 String
+  webhookSecret        String
+  accessToken          String
+  prReviewEnabled      Boolean             @default(true)
+  commitReviewEnabled  Boolean             @default(false)
+  createdAt            DateTime            @default(now())
+  rules                ReviewRule?
+  reviewLogs           ReviewLog[]
+  commitBatchReviews   CommitBatchReview[]
+  reviewedCommits      ReviewedCommit[]
 
   @@unique([provider, owner, name])
 }
@@ -43,4 +47,42 @@ model ReviewLog {
   finishedAt   DateTime?
 
   @@index([repoId, createdAt])
+}
+
+model CommitBatchReview {
+  id              String           @id @default(cuid())
+  repoId          String
+  repository      Repository       @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  branchName      String
+  authorLogin     String
+  authorEmail     String?
+  periodStart     DateTime
+  periodEnd       DateTime
+  commitShas      Json
+  status          String
+  seenByUser      Boolean          @default(false)
+  mdContent       String?          @db.Text
+  rawAiOutput     String?          @db.Text
+  errorMessage    String?          @db.Text
+  createdAt       DateTime         @default(now())
+  finishedAt      DateTime?
+  reviewedCommits ReviewedCommit[]
+
+  @@index([repoId, createdAt])
+  @@index([repoId, branchName, createdAt])
+}
+
+model ReviewedCommit {
+  id                  String             @id @default(cuid())
+  repoId              String
+  repository          Repository         @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  branchName          String
+  sha                 String
+  commitBatchReviewId String?
+  commitBatchReview   CommitBatchReview? @relation(fields: [commitBatchReviewId], references: [id], onDelete: SetNull)
+  reviewedAt          DateTime           @default(now())
+
+  @@unique([repoId, sha, branchName])
+  @@index([repoId])
+  @@index([repoId, branchName])
 }

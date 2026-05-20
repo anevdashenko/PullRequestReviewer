@@ -19,6 +19,14 @@ export type AiReviewResult = {
   findings: AiFinding[]
 }
 
+/** Character counts of LLM chat request payloads (system + user per API call). */
+export type LlmRequestSizes = {
+  userContentChars: number
+  overviewRequestChars: number
+  codeReviewRequestChars: number
+  totalInputChars: number
+}
+
 const overviewJsonInstruction = `Respond with a single JSON object only (no markdown), shape:
 {"whatChanged":"concise summary of what this PR does","affectedAreas":["project areas or modules touched"],"focusForReviewer":"what deserves the most scrutiny and why","priorityReview":["files or code areas to read first — use paths from the diff when possible"],"checklist":["actionable reviewer checklist items"]}
 Base everything on the diff. Do not invent files. Max 8 items per array.`
@@ -32,6 +40,41 @@ const overviewSystemPrompt = `You prepare human reviewers to triage a pull reque
 Describe what changed, which parts of the project are affected, what to focus on, which files or areas to read first, and a practical reviewer checklist. Be concise and actionable.`
 
 const codeReviewSystemPrompt = `You are an expert code reviewer. Focus on bugs, security, performance, readability, extensibility, and maintainability. Be concise and actionable.`
+
+function buildOverviewSystem(repoSystemPrompt: string): string {
+  return repoSystemPrompt.trim()
+    ? `${overviewSystemPrompt}\n\nRepository rules:\n${repoSystemPrompt.trim()}`
+    : overviewSystemPrompt
+}
+
+function buildCodeReviewSystem(repoSystemPrompt: string): string {
+  return repoSystemPrompt.trim()
+    ? `${codeReviewSystemPrompt}\n\nRepository rules:\n${repoSystemPrompt.trim()}`
+    : codeReviewSystemPrompt
+}
+
+function llmRequestCharCount(systemPrompt: string, jsonInstruction: string, userContent: string): number {
+  return `${systemPrompt}\n\n${jsonInstruction}`.length + userContent.length
+}
+
+export function computeLlmRequestSizes(repoSystemPrompt: string, userContent: string): LlmRequestSizes {
+  const overviewRequestChars = llmRequestCharCount(
+    buildOverviewSystem(repoSystemPrompt),
+    overviewJsonInstruction,
+    userContent,
+  )
+  const codeReviewRequestChars = llmRequestCharCount(
+    buildCodeReviewSystem(repoSystemPrompt),
+    codeReviewJsonInstruction,
+    userContent,
+  )
+  return {
+    userContentChars: userContent.length,
+    overviewRequestChars,
+    codeReviewRequestChars,
+    totalInputChars: overviewRequestChars + codeReviewRequestChars,
+  }
+}
 
 function useJsonObjectResponseFormat(): boolean {
   const v = process.env.OPENAI_JSON_OBJECT_MODE?.trim().toLowerCase()
@@ -125,10 +168,13 @@ export async function runLlmOverview(
   repoSystemPrompt: string,
   userContent: string,
 ): Promise<AiOverview> {
-  const system = repoSystemPrompt.trim()
-    ? `${overviewSystemPrompt}\n\nRepository rules:\n${repoSystemPrompt.trim()}`
-    : overviewSystemPrompt
-  const obj = await runLlmJsonPhase(apiKey, model, system, overviewJsonInstruction, userContent)
+  const obj = await runLlmJsonPhase(
+    apiKey,
+    model,
+    buildOverviewSystem(repoSystemPrompt),
+    overviewJsonInstruction,
+    userContent,
+  )
   return parseOverview(obj)
 }
 
@@ -138,10 +184,13 @@ export async function runLlmCodeReview(
   repoSystemPrompt: string,
   userContent: string,
 ): Promise<AiFinding[]> {
-  const system = repoSystemPrompt.trim()
-    ? `${codeReviewSystemPrompt}\n\nRepository rules:\n${repoSystemPrompt.trim()}`
-    : codeReviewSystemPrompt
-  const obj = await runLlmJsonPhase(apiKey, model, system, codeReviewJsonInstruction, userContent)
+  const obj = await runLlmJsonPhase(
+    apiKey,
+    model,
+    buildCodeReviewSystem(repoSystemPrompt),
+    codeReviewJsonInstruction,
+    userContent,
+  )
   return parseFindings(obj)
 }
 

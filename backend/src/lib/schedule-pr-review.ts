@@ -17,7 +17,7 @@ export type SchedulePrReviewContext = {
  * Creates a ReviewLog and enqueues processing when this PR head is not already
  * covered by a completed or in-flight review (same repo, PR number, head SHA).
  */
-export async function scheduleGithubPrReview(
+export async function schedulePrReview(
   repoId: string,
   prNumber: number,
   headSha: string | null,

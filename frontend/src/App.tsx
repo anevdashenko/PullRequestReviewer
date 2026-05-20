@@ -3,6 +3,9 @@ import Layout from './Layout'
 import ReposPage from './pages/ReposPage'
 import RulesPage from './pages/RulesPage'
 import LogsPage from './pages/LogsPage'
+import CommitReviewReposPage from './pages/CommitReviewReposPage'
+import CommitReviewsListPage from './pages/CommitReviewsListPage'
+import CommitReviewDetailPage from './pages/CommitReviewDetailPage'
 
 export default function App() {
   return (
@@ -10,6 +13,9 @@ export default function App() {
       <Route path="/" element={<Layout />}>
         <Route index element={<ReposPage />} />
         <Route path="logs" element={<LogsPage />} />
+        <Route path="commit-reviews" element={<CommitReviewReposPage />} />
+        <Route path="commit-reviews/:repoId" element={<CommitReviewsListPage />} />
+        <Route path="commit-reviews/:repoId/:reviewId" element={<CommitReviewDetailPage />} />
         <Route path="repos/:id/rules" element={<RulesPage />} />
         <Route path="repos/:repoId/logs" element={<LogsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

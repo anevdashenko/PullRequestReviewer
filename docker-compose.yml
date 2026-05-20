@@ -39,6 +39,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:3000}
       PR_POLL_INTERVAL_MS: ${PR_POLL_INTERVAL_MS:-0}
+      COMMIT_POLL_INTERVAL_MS: ${COMMIT_POLL_INTERVAL_MS:-0}
+      COMMIT_REVIEW_LOOKBACK_SEC: ${COMMIT_REVIEW_LOOKBACK_SEC:-86400}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       NODE_ENV: production
     depends_on:
@@ -58,6 +60,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_JSON_OBJECT_MODE: ${OPENAI_JSON_OBJECT_MODE:-}
+      DIFF_MAX_CHARS: ${DIFF_MAX_CHARS:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       NODE_ENV: production
     depends_on:

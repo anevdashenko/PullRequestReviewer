@@ -2,6 +2,7 @@ import Fastify, { type FastifyRequest } from 'fastify'
 import cors from '@fastify/cors'
 import { connectDatabase } from './db.js'
 import { registerAuthedApi } from './plugins/admin-auth.js'
+import { startCommitPollTimer } from './poll-commits.js'
 import { startPrPollTimer } from './poll-repos.js'
 import { registerWebhookRoutes } from './routes/webhooks.js'
 
@@ -18,7 +19,7 @@ app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, 
   const path = req.url?.split('?')[0] ?? ''
   try {
     const buf = body instanceof Buffer ? body : Buffer.from(String(body), 'utf8')
-    if (path === '/webhooks/github') {
+    if (path === '/webhooks/github' || path === '/webhooks/gitlab') {
       ;(req as RequestWithRawBody).rawBody = buf
     }
     const json = JSON.parse(buf.toString('utf8')) as unknown
@@ -45,6 +46,7 @@ try {
 }
 
 startPrPollTimer()
+startCommitPollTimer()
 
 try {
   await app.listen({ port, host })

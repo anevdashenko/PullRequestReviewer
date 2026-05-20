@@ -117,6 +117,14 @@ td {
   vertical-align: top;
 }
 
+tr.review-row-new {
+  background: #fef2f2;
+}
+
+tr.review-row-seen {
+  background: #f0fdf4;
+}
+
 .error {
   color: #b91c1c;
   white-space: pre-wrap;
@@ -129,4 +137,33 @@ td {
 .mono {
   font-family: ui-monospace, monospace;
   font-size: 0.8rem;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.markdown-body h1:first-child,
+.markdown-body h2:first-child {
+  margin-top: 0;
+}
+
+.markdown-body p,
+.markdown-body ul {
+  margin: 0.5rem 0;
+}
+
+.markdown-body ul {
+  padding-left: 1.25rem;
+}
+
+.markdown-body code {
+  font-size: 0.85em;
+}
+
+.markdown-body a {
+  word-break: break-all;
 }
