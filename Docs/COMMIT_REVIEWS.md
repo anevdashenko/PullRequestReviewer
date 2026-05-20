@@ -23,6 +23,17 @@ COMMIT_REVIEW_LOOKBACK_SEC=86400
 
 PR polling (`PR_POLL_INTERVAL_MS`) is independent and unchanged.
 
+## LLM diff size and full files (worker)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DIFF_MAX_CHARS` | `120000` | Max characters of diff text in one review (patch + optional full files) |
+| `INCLUDE_FULL_FILE_CONTENT` | off | When `true`, attach full `.cs` at HEAD if patch is empty or shorter than `PATCH_MIN_CHARS` |
+| `PATCH_MIN_CHARS` | `500` | Threshold for “short patch” |
+| `FILE_MAX_CHARS` | `20000` | Skip full file if larger than this |
+
+Full files are only fetched for `added` / `modified` (not `removed`). Applies to PR/MR and commit batch reviews.
+
 ## Behaviour
 
 - Poll runs only for repositories with `commitReviewEnabled: true`.
@@ -41,7 +52,7 @@ On repositories with many branches, each poll tick performs more API calls and m
 
 Admin UI → **Commit reviews**:
 
-1. List repositories that have at least one batch review.
+1. List repositories that have at least one batch review. The **New** column shows how many completed (`status=done`) batch reviews are not marked seen yet (`seenByUser=false`).
 2. Open a repository → list of reviews by branch, author, and period. Rows are highlighted **green** (seen) or **red** (new) based on `seenByUser`.
 3. Open a review → rendered Markdown. Use **Mark seen** to set `seenByUser` on that batch.
 

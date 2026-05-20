@@ -9,6 +9,7 @@ import {
 } from './queue.js'
 import { formatCommitReviewMarkdown } from './lib/commit-review-format.js'
 import { normalizeFindingPaths } from './lib/diff-lines.js'
+import { includeFullFileContent } from './lib/defaults.js'
 import { computeLlmRequestSizes, runLlmCodeReview, runLlmOverview } from './lib/llm.js'
 import { workerLog, shortSha } from './lib/logger.js'
 import { getProvider } from './providers/index.js'
@@ -21,6 +22,11 @@ function parseExcludeGlobs(value: unknown): string[] {
 function parseCommitShas(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((x): x is string => typeof x === 'string')
+}
+
+function fullFileContextHint(): string {
+  if (!includeFullFileContent()) return ''
+  return 'Note: Some files include ### Full file (HEAD) for context; use ### Diff for what changed.\n\n'
 }
 
 async function processReview(reviewLogId: string, jobId: string | undefined): Promise<void> {
@@ -64,7 +70,7 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
 
   step('fetch_diff', { excludeGlobCount: excludeGlobs.length, provider: repo.provider })
   const diffStarted = Date.now()
-  const { diffText, headSha, changedPaths } = await provider.buildMrDiff(
+  const { diffText, headSha, changedPaths, fullFilesAttached } = await provider.buildMrDiff(
     repo.accessToken,
     repo.owner,
     repo.name,
@@ -79,6 +85,8 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
       ms: Date.now() - diffStarted,
       diffChars: diffText.length,
       headSha: shortSha(headSha),
+      includeFullFileContent: includeFullFileContent(),
+      fullFilesAttached,
     },
     'diff fetched',
   )
@@ -89,7 +97,7 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
     throw new Error('OPENAI_API_KEY is not set (for a local OpenAI-compatible server set OPENAI_BASE_URL)')
   }
 
-  const userContent = `Repository: ${repo.owner}/${repo.name}\nPR: #${log.prNumber}\n\n${diffText}`
+  const userContent = `Repository: ${repo.owner}/${repo.name}\nPR: #${log.prNumber}\n\n${fullFileContextHint()}${diffText}`
   const requestSizes = computeLlmRequestSizes(rules.systemPrompt, userContent)
 
   step('llm_overview', { model: rules.model, hasOpenAiBaseUrl: Boolean(baseUrl) })
@@ -288,7 +296,7 @@ async function processCommitBatchReview(commitBatchReviewId: string, jobId: stri
 
   step('fetch_diff', { excludeGlobCount: excludeGlobs.length, provider: repo.provider })
   const diffStarted = Date.now()
-  const { diffText, changedPaths, commitMessages } = await provider.buildCommitBatchDiff(
+  const { diffText, changedPaths, commitMessages, fullFilesAttached } = await provider.buildCommitBatchDiff(
     repo.accessToken,
     repo.owner,
     repo.name,
@@ -302,6 +310,8 @@ async function processCommitBatchReview(commitBatchReviewId: string, jobId: stri
       jobId: jobId ?? null,
       ms: Date.now() - diffStarted,
       diffChars: diffText.length,
+      includeFullFileContent: includeFullFileContent(),
+      fullFilesAttached,
     },
     'commit diff fetched',
   )
@@ -323,7 +333,7 @@ async function processCommitBatchReview(commitBatchReviewId: string, jobId: stri
     '',
     'Review this set of commits (not a pull request). Summarize what was done across all commits, then analyze the combined code changes for bugs and issues.',
     '',
-    diffText,
+    fullFileContextHint() + diffText,
   ].join('\n')
   const requestSizes = computeLlmRequestSizes(rules.systemPrompt, userContent)
 

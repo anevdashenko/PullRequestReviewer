@@ -284,6 +284,16 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       _count: { id: true },
     })
     const countMap = new Map(counts.map((c) => [c.repoId, c._count.id]))
+    const newCounts = await prisma.commitBatchReview.groupBy({
+      by: ['repoId'],
+      where: {
+        repoId: { in: repoIds },
+        status: 'done',
+        seenByUser: false,
+      },
+      _count: { id: true },
+    })
+    const newCountMap = new Map(newCounts.map((c) => [c.repoId, c._count.id]))
     return repos
       .map((r) => ({
         id: r.id,
@@ -291,6 +301,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         owner: r.owner,
         name: r.name,
         reviewCount: countMap.get(r.id) ?? 0,
+        newReviewCount: newCountMap.get(r.id) ?? 0,
       }))
       .sort((a, b) => `${a.owner}/${a.name}`.localeCompare(`${b.owner}/${b.name}`))
   })

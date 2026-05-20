@@ -1,7 +1,13 @@
 import crypto from 'node:crypto'
 import { Gitlab } from '@gitbeaker/rest'
 import { minimatch } from 'minimatch'
-import { DIFF_MAX_CHARS } from '../lib/defaults.js'
+import {
+  appendFileChange,
+  appendWithBudget,
+  type DiffAppendResult,
+  type FileChangeStatus,
+} from '../lib/diff-content.js'
+import { fetchGitlabFileAtRef } from '../lib/gitlab-file-content.js'
 import { formatReviewBody } from '../lib/review-submit.js'
 import type { CommitBatchDiffResult, PolledCommit, VcsProvider } from './types.js'
 const GITLAB_HOST = 'https://gitlab.com'
@@ -53,20 +59,23 @@ function repoFromPayload(body: GitlabMrPayload): { owner?: string; name?: string
   return {}
 }
 
-function fileStatus(change: GitlabChange): string {
+function fileStatus(change: GitlabChange): FileChangeStatus {
   if (change.new_file) return 'added'
   if (change.deleted_file) return 'removed'
   return 'modified'
 }
 
-function appendChangesToDiff(
-  out: string,
+async function appendChangesToDiffAsync(
+  state: DiffAppendResult,
   changes: GitlabChange[],
   excludeGlobs: string[],
   changedPaths: string[],
-): string {
-  let result = out
+  ref: string,
+  fetchFile: (path: string, ref: string) => Promise<string | null>,
+): Promise<DiffAppendResult> {
+  let next = state
   for (const ch of changes) {
+    if (next.truncated) break
     const filename = ch.new_path ?? ch.old_path
     if (!filename) continue
     if (!filename.toLowerCase().endsWith('.cs')) continue
@@ -74,13 +83,9 @@ function appendChangesToDiff(
     const patch = ch.diff ?? ''
     if (!patch && !ch.new_file && !ch.deleted_file) continue
     changedPaths.push(filename)
-    result += `\n## ${filename} (${fileStatus(ch)})\n${patch || '(no patch)'}\n`
-    if (result.length > DIFF_MAX_CHARS) {
-      result += '\n\n[TRUNCATED: diff exceeded character limit]\n'
-      break
-    }
+    next = await appendFileChange(next, filename, fileStatus(ch), patch, ref, fetchFile)
   }
-  return result
+  return next
 }
 
 export const gitlabProvider: VcsProvider = {
@@ -158,9 +163,17 @@ export const gitlabProvider: VcsProvider = {
       changes?: GitlabChange[]
     }
     const changedPaths: string[] = []
-    let out = appendChangesToDiff('', changes.changes ?? [], excludeGlobs, changedPaths)
-    const diffText = out.trim() || '(no .cs file changes in this MR)'
-    return { diffText, headSha, changedPaths }
+    const fetchFile = (path: string, fileRef: string) => fetchGitlabFileAtRef(api, projectId, path, fileRef)
+    const state = await appendChangesToDiffAsync(
+      { out: '', truncated: false, fullFilesAttached: 0 },
+      changes.changes ?? [],
+      excludeGlobs,
+      changedPaths,
+      headSha,
+      fetchFile,
+    )
+    const diffText = state.out.trim() || '(no .cs file changes in this MR)'
+    return { diffText, headSha, changedPaths, fullFilesAttached: state.fullFilesAttached }
   },
 
   async submitMrReview(accessToken, owner, name, mrNumber, _headSha, ai, requestSizes) {
@@ -229,34 +242,47 @@ export const gitlabProvider: VcsProvider = {
   async buildCommitBatchDiff(accessToken, owner, name, shas, excludeGlobs) {
     const api = gitlabClient(accessToken)
     const projectId = projectPath(owner, name)
-    let out = ''
+    let state: DiffAppendResult = { out: '', truncated: false, fullFilesAttached: 0 }
     const changedPaths = new Set<string>()
     const commitMessages: CommitBatchDiffResult['commitMessages'] = []
+    const fetchFile = (path: string, fileRef: string) => fetchGitlabFileAtRef(api, projectId, path, fileRef)
 
     for (const sha of shas) {
       const commit = await api.Commits.show(projectId, sha)
       const message = commit.message ?? '(no message)'
       commitMessages.push({ sha, message })
 
-      out += `\n# Commit ${sha.slice(0, 7)}\n${message.split('\n')[0]}\n`
+      const header = `\n# Commit ${sha.slice(0, 7)}\n${message.split('\n')[0]}\n`
+      const afterHeader = appendWithBudget(state.out, header)
+      state = {
+        out: afterHeader.out,
+        truncated: afterHeader.truncated,
+        fullFilesAttached: state.fullFilesAttached,
+      }
+      if (state.truncated) break
 
       const diff = (await api.Commits.showDiff(projectId, sha)) as GitlabChange[]
       const paths: string[] = []
-      out = appendChangesToDiff(out, diff, excludeGlobs, paths)
+      state = await appendChangesToDiffAsync(state, diff, excludeGlobs, paths, sha, fetchFile)
       for (const p of paths) changedPaths.add(p)
 
-      if (out.length > DIFF_MAX_CHARS) {
-        out += '\n\n[TRUNCATED: diff exceeded character limit]\n'
+      if (state.truncated) {
         return {
-          diffText: out.trim() || '(no .cs file changes in these commits)',
+          diffText: state.out.trim() || '(no .cs file changes in these commits)',
           changedPaths: [...changedPaths],
           commitMessages,
+          fullFilesAttached: state.fullFilesAttached,
         }
       }
     }
 
-    const diffText = out.trim() || '(no .cs file changes in these commits)'
-    return { diffText, changedPaths: [...changedPaths], commitMessages }
+    const diffText = state.out.trim() || '(no .cs file changes in these commits)'
+    return {
+      diffText,
+      changedPaths: [...changedPaths],
+      commitMessages,
+      fullFilesAttached: state.fullFilesAttached,
+    }
   },
 
   mrUrl(owner, name, mrNumber) {

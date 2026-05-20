@@ -8,6 +8,7 @@ type RepoWithReviews = {
   owner: string
   name: string
   reviewCount: number
+  newReviewCount: number
 }
 
 export default function CommitReviewReposPage() {
@@ -25,7 +26,8 @@ export default function CommitReviewReposPage() {
     <>
       <h1>Commit reviews</h1>
       <p style={{ marginTop: 0, color: '#475569' }}>
-        Repositories with at least one completed or in-progress commit batch review.
+        Repositories with at least one completed or in-progress commit batch review.{' '}
+        <strong>New</strong> counts completed reviews not yet marked seen.
       </p>
 
       {error && <p className="error">{error}</p>}
@@ -39,6 +41,7 @@ export default function CommitReviewReposPage() {
               <tr>
                 <th>Repository</th>
                 <th>Reviews</th>
+                <th>New</th>
                 <th />
               </tr>
             </thead>
@@ -49,6 +52,7 @@ export default function CommitReviewReposPage() {
                     {r.owner}/{r.name}
                   </td>
                   <td>{r.reviewCount}</td>
+                  <td className={r.newReviewCount > 0 ? 'error' : undefined}>{r.newReviewCount}</td>
                   <td>
                     <Link to={`/commit-reviews/${r.id}`}>View reviews</Link>
                   </td>

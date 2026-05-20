@@ -8,6 +8,7 @@ export type MrDiffResult = {
   diffText: string
   headSha: string
   changedPaths: string[]
+  fullFilesAttached: number
 }
 
 export type OpenMr = {
@@ -34,6 +35,7 @@ export type CommitBatchDiffResult = {
   diffText: string
   changedPaths: string[]
   commitMessages: CommitMessageMeta[]
+  fullFilesAttached: number
 }
 
 export interface VcsProvider {
