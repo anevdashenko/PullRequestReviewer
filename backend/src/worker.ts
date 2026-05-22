@@ -399,6 +399,18 @@ async function processCommitBatchReview(commitBatchReviewId: string, jobId: stri
     },
   })
 
+  const batchStillExists = await prisma.commitBatchReview.findUnique({
+    where: { id: commitBatchReviewId },
+    select: { id: true },
+  })
+  if (!batchStillExists) {
+    workerLog.warn(
+      { event: 'commit_review_skip_mark_reviewed', commitBatchReviewId, jobId: jobId ?? null },
+      'batch removed during review; skip ReviewedCommit upsert',
+    )
+    return
+  }
+
   for (const sha of shas) {
     await prisma.reviewedCommit.upsert({
       where: { repoId_sha_branchName: { repoId: repo.id, sha, branchName: batch.branchName } },

@@ -20,6 +20,175 @@ type PollCommitTickStats = {
   skipped: number
 }
 
+export type PollCommitsForRepositoryResult = {
+  authorsScheduled: number
+  skipped: number
+  branchesPolled: number
+  commitsSeen: number
+}
+
+export async function pollCommitsForRepository(
+  repoId: string,
+  ctx: { source: 'clear' | 'poll'; tickId?: string },
+): Promise<PollCommitsForRepositoryResult> {
+  const repo = await prisma.repository.findUnique({
+    where: { id: repoId },
+    select: { id: true, provider: true, owner: true, name: true, accessToken: true, commitReviewEnabled: true },
+  })
+  if (!repo) throw new Error(`Repository ${repoId} not found`)
+  if (!repo.commitReviewEnabled) {
+    return { authorsScheduled: 0, skipped: 0, branchesPolled: 0, commitsSeen: 0 }
+  }
+
+  const lookbackSec = getLookbackSec()
+  const periodEnd = new Date()
+  const periodStart = new Date(periodEnd.getTime() - lookbackSec * 1000)
+  const sinceIso = periodStart.toISOString()
+  const tickId = ctx.tickId ?? `${ctx.source}-${repoId}`
+
+  const stats: PollCommitsForRepositoryResult = {
+    authorsScheduled: 0,
+    skipped: 0,
+    branchesPolled: 0,
+    commitsSeen: 0,
+  }
+
+  const repoRef = `${repo.owner}/${repo.name}`
+  const repoStarted = Date.now()
+  pollLog.info(
+    {
+      event: 'commit_poll_repo_start',
+      tickId,
+      repoId: repo.id,
+      provider: repo.provider,
+      owner: repo.owner,
+      name: repo.name,
+      source: ctx.source,
+    },
+    `polling commits for ${repoRef}`,
+  )
+
+  try {
+    const provider = getProvider(repo.provider)
+    const branchNames = await provider.listBranches(repo.accessToken, repo.owner, repo.name)
+
+    if (branchNames.length === 0) {
+      pollLog.warn({ event: 'commit_poll_repo_skip', tickId, repoId: repo.id, reason: 'no branches' }, 'skip')
+      return stats
+    }
+
+    let repoScheduled = 0
+    let repoSkipped = 0
+    let repoNewCommits = 0
+    let branchesWithCommits = 0
+    let branchesSkippedEmpty = 0
+
+    for (const branchName of branchNames) {
+      stats.branchesPolled += 1
+
+      const reviewedRows = await prisma.reviewedCommit.findMany({
+        where: { repoId: repo.id, branchName },
+        select: { sha: true },
+      })
+      const reviewedSet = new Set(reviewedRows.map((r) => r.sha))
+
+      const polled = await provider.listRecentCommits(
+        repo.accessToken,
+        repo.owner,
+        repo.name,
+        branchName,
+        sinceIso,
+      )
+
+      const commits: CommitInfo[] = []
+      for (const c of polled) {
+        stats.commitsSeen += 1
+        if (reviewedSet.has(c.sha)) continue
+        commits.push({
+          sha: c.sha,
+          authorLogin: c.authorLogin,
+          authorEmail: c.authorEmail,
+        })
+      }
+
+      if (commits.length === 0) {
+        branchesSkippedEmpty += 1
+        continue
+      }
+
+      branchesWithCommits += 1
+      repoNewCommits += commits.length
+
+      const byAuthor = new Map<string, CommitInfo[]>()
+      for (const c of commits) {
+        const list = byAuthor.get(c.authorLogin) ?? []
+        list.push(c)
+        byAuthor.set(c.authorLogin, list)
+      }
+
+      for (const [authorLogin, authorCommits] of byAuthor) {
+        const authorEmail = authorCommits.find((c) => c.authorEmail)?.authorEmail ?? null
+        const result = await scheduleCommitBatchReview(
+          repo.id,
+          branchName,
+          authorLogin,
+          authorEmail,
+          authorCommits,
+          periodStart,
+          periodEnd,
+          { source: ctx.source, tickId },
+        )
+
+        if (result.accepted) {
+          repoScheduled += 1
+          stats.authorsScheduled += 1
+        } else {
+          repoSkipped += 1
+          stats.skipped += 1
+        }
+      }
+    }
+
+    pollLog.info(
+      {
+        event: 'commit_poll_repo_done',
+        tickId,
+        repoId: repo.id,
+        provider: repo.provider,
+        owner: repo.owner,
+        name: repo.name,
+        ms: Date.now() - repoStarted,
+        branchesTotal: branchNames.length,
+        branchesWithCommits,
+        branchesSkippedEmpty,
+        newCommits: repoNewCommits,
+        scheduled: repoScheduled,
+        skipped: repoSkipped,
+        source: ctx.source,
+      },
+      `finished commit poll for ${repoRef}`,
+    )
+  } catch (err) {
+    pollLog.error(
+      {
+        err,
+        event: 'commit_poll_repo_error',
+        tickId,
+        repoId: repo.id,
+        provider: repo.provider,
+        owner: repo.owner,
+        name: repo.name,
+        ms: Date.now() - repoStarted,
+        source: ctx.source,
+      },
+      `commit poll failed for ${repoRef}`,
+    )
+    throw err
+  }
+
+  return stats
+}
+
 async function pollCommitsOnce(tickId: string): Promise<PollCommitTickStats> {
   const stats: PollCommitTickStats = {
     reposTotal: 0,
@@ -53,136 +222,15 @@ async function pollCommitsOnce(tickId: string): Promise<PollCommitTickStats> {
   }
 
   for (const repo of repos) {
-    const repoRef = `${repo.owner}/${repo.name}`
-    const repoStarted = Date.now()
-    pollLog.info(
-      {
-        event: 'commit_poll_repo_start',
-        tickId,
-        repoId: repo.id,
-        provider: repo.provider,
-        owner: repo.owner,
-        name: repo.name,
-      },
-      `polling commits for ${repoRef}`,
-    )
-
     try {
-      const provider = getProvider(repo.provider)
-      const branchNames = await provider.listBranches(repo.accessToken, repo.owner, repo.name)
-
-      if (branchNames.length === 0) {
-        pollLog.warn({ event: 'commit_poll_repo_skip', tickId, repoId: repo.id, reason: 'no branches' }, 'skip')
-        stats.reposOk += 1
-        continue
-      }
-
-      let repoScheduled = 0
-      let repoSkipped = 0
-      let repoNewCommits = 0
-      let branchesWithCommits = 0
-      let branchesSkippedEmpty = 0
-
-      for (const branchName of branchNames) {
-        stats.branchesPolled += 1
-
-        const reviewedRows = await prisma.reviewedCommit.findMany({
-          where: { repoId: repo.id, branchName },
-          select: { sha: true },
-        })
-        const reviewedSet = new Set(reviewedRows.map((r) => r.sha))
-
-        const polled = await provider.listRecentCommits(
-          repo.accessToken,
-          repo.owner,
-          repo.name,
-          branchName,
-          sinceIso,
-        )
-
-        const commits: CommitInfo[] = []
-        for (const c of polled) {
-          stats.commitsSeen += 1
-          if (reviewedSet.has(c.sha)) continue
-          commits.push({
-            sha: c.sha,
-            authorLogin: c.authorLogin,
-            authorEmail: c.authorEmail,
-          })
-        }
-
-        if (commits.length === 0) {
-          branchesSkippedEmpty += 1
-          continue
-        }
-
-        branchesWithCommits += 1
-        repoNewCommits += commits.length
-
-        const byAuthor = new Map<string, CommitInfo[]>()
-        for (const c of commits) {
-          const list = byAuthor.get(c.authorLogin) ?? []
-          list.push(c)
-          byAuthor.set(c.authorLogin, list)
-        }
-
-        for (const [authorLogin, authorCommits] of byAuthor) {
-          const authorEmail = authorCommits.find((c) => c.authorEmail)?.authorEmail ?? null
-          const result = await scheduleCommitBatchReview(
-            repo.id,
-            branchName,
-            authorLogin,
-            authorEmail,
-            authorCommits,
-            periodStart,
-            periodEnd,
-            { source: 'poll', tickId },
-          )
-
-          if (result.accepted) {
-            repoScheduled += 1
-            stats.authorsScheduled += 1
-          } else {
-            repoSkipped += 1
-            stats.skipped += 1
-          }
-        }
-      }
-
+      const repoStats = await pollCommitsForRepository(repo.id, { source: 'poll', tickId })
+      stats.branchesPolled += repoStats.branchesPolled
+      stats.commitsSeen += repoStats.commitsSeen
+      stats.authorsScheduled += repoStats.authorsScheduled
+      stats.skipped += repoStats.skipped
       stats.reposOk += 1
-      pollLog.info(
-        {
-          event: 'commit_poll_repo_done',
-          tickId,
-          repoId: repo.id,
-          provider: repo.provider,
-          owner: repo.owner,
-          name: repo.name,
-          ms: Date.now() - repoStarted,
-          branchesTotal: branchNames.length,
-          branchesWithCommits,
-          branchesSkippedEmpty,
-          newCommits: repoNewCommits,
-          scheduled: repoScheduled,
-          skipped: repoSkipped,
-        },
-        `finished commit poll for ${repoRef}`,
-      )
-    } catch (err) {
+    } catch {
       stats.reposFailed += 1
-      pollLog.error(
-        {
-          err,
-          event: 'commit_poll_repo_error',
-          tickId,
-          repoId: repo.id,
-          provider: repo.provider,
-          owner: repo.owner,
-          name: repo.name,
-          ms: Date.now() - repoStarted,
-        },
-        `commit poll failed for ${repoRef}`,
-      )
     }
   }
 

@@ -48,7 +48,7 @@ export default function CommitReviewsListPage() {
     const label = `${repo.owner}/${repo.name}`
     if (
       !confirm(
-        `Clear all commit reviews and reviewed-commit tracking for ${label}? This cannot be undone.`,
+        `Clear all commit reviews and the reviewed-commit history for ${label}? Unreviewed commits in the lookback window will be scheduled again immediately if commit review is enabled. This cannot be undone.`,
       )
     ) {
       return

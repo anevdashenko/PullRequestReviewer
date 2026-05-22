@@ -15,7 +15,7 @@ export type ScheduleCommitBatchResult =
   | { accepted: false; reason: string }
 
 export type ScheduleCommitBatchContext = {
-  source: 'poll'
+  source: 'poll' | 'clear'
   tickId?: string
 }
 

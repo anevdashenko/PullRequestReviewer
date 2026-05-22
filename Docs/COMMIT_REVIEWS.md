@@ -72,7 +72,7 @@ Response: `{ "id": "...", "seenByUser": true }`.
 
 ### Clear all commit reviews for a repository
 
-Removes every `CommitBatchReview` and `ReviewedCommit` row for the repository so polling can treat commits as unreviewed again. Does not delete the repository, review rules, or PR review logs (`ReviewLog`).
+Removes every `CommitBatchReview` and `ReviewedCommit` row for the repository (including orphaned `ReviewedCommit` rows left after batch delete). Pending `commit-review` queue jobs for that repo are purged. If **Commit review** is enabled for the repository, the API immediately runs one commit poll for that repo so commits in the lookback window can be re-queued without waiting for `COMMIT_POLL_INTERVAL_MS`. Does not delete the repository, review rules, or PR review logs (`ReviewLog`).
 
 Admin UI → open a repository under **Commit reviews** → **Clear reviews** (confirmation required).
 
@@ -86,9 +86,12 @@ Response:
 ```json
 {
   "reviewedCommitsDeleted": 42,
-  "batchReviewsDeleted": 5
+  "batchReviewsDeleted": 5,
+  "pollScheduled": 2
 }
 ```
+
+`pollScheduled` is the number of author batches enqueued by the immediate post-clear poll (0 if commit review is disabled for the repo or no unreviewed commits were found in the lookback window).
 
 Pending `commit-review` queue jobs for removed batches are purged before the database delete.
 
