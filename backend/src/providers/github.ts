@@ -4,7 +4,7 @@ import { buildCommitBatchDiffText } from '../lib/commit-diff.js'
 import { buildPrDiffText } from '../lib/pr-diff.js'
 import { submitGithubReview } from '../lib/review-submit.js'
 import { verifyGithubSignature } from '../lib/webhook-signature.js'
-import type { OpenMr, PolledCommit, VcsProvider } from './types.js'
+import type { MrRefInfo, OpenMr, PolledCommit, VcsProvider } from './types.js'
 
 type RequestWithRawBody = FastifyRequest & { rawBody?: Buffer }
 
@@ -116,6 +116,18 @@ export const githubProvider: VcsProvider = {
       page += 1
     }
     return out
+  },
+
+  async getMrRef(accessToken, owner, name, mrNumber) {
+    const octokit = new Octokit({ auth: accessToken })
+    const { data: pr } = await octokit.pulls.get({ owner, repo: name, pull_number: mrNumber })
+    const headSha = pr.head?.sha
+    const headBranch = pr.head?.ref
+    const baseSha = pr.base?.sha
+    if (!headSha || !headBranch || !baseSha) {
+      throw new Error(`GitHub PR #${mrNumber} missing head/base ref metadata`)
+    }
+    return { headSha, headBranch, baseSha } satisfies MrRefInfo
   },
 
   async buildMrDiff(accessToken, owner, name, mrNumber, excludeGlobs) {

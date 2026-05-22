@@ -10,9 +10,20 @@ import {
 import { formatCommitReviewMarkdown } from './lib/commit-review-format.js'
 import { normalizeFindingPaths } from './lib/diff-lines.js'
 import { includeFullFileContent } from './lib/defaults.js'
-import { computeLlmRequestSizes, runLlmCodeReview, runLlmOverview } from './lib/llm.js'
+import { syncWorkspace } from './lib/repo-cache/index.js'
+import {
+  assertReviewLlmReady,
+  getReviewLlmProvider,
+  getReviewLlmStartupInfo,
+  resolveLlmProviderId,
+} from './lib/review-llm/index.js'
+import type { ReviewLlmInput, ReviewWorkspaceContext } from './lib/review-llm/index.js'
+import { reviewRuleToPrompts } from './lib/review-llm/prompt-fields.js'
+import { DEFAULT_BATCH_OPENAI_USER_INTRO } from './lib/review-llm/prompt-defaults.js'
+import type { ReviewRule } from '@prisma/client'
 import { workerLog, shortSha } from './lib/logger.js'
 import { getProvider } from './providers/index.js'
+import type { ProviderId } from './providers/types.js'
 
 function parseExcludeGlobs(value: unknown): string[] {
   if (!Array.isArray(value)) return []
@@ -27,6 +38,42 @@ function parseCommitShas(value: unknown): string[] {
 function fullFileContextHint(): string {
   if (!includeFullFileContent()) return ''
   return 'Note: Some files include ### Full file (HEAD) for context; use ### Diff for what changed.\n\n'
+}
+
+function llmInputFromRules(rules: ReviewRule, reviewKind: 'pr' | 'batch'): Pick<ReviewLlmInput, 'model' | 'reviewKind' | 'prompts'> {
+  return { model: rules.model, reviewKind, prompts: reviewRuleToPrompts(rules) }
+}
+
+async function runLlmReviewPhases(
+  rules: ReviewRule,
+  input: ReviewLlmInput,
+  logExtra: Record<string, unknown>,
+  step: (name: string, extra?: Record<string, unknown>) => void,
+): Promise<{
+  overview: Awaited<ReturnType<ReturnType<typeof getReviewLlmProvider>['runOverview']>>
+  findings: Awaited<ReturnType<ReturnType<typeof getReviewLlmProvider>['runCodeReview']>>
+  requestSizes: ReturnType<ReturnType<typeof getReviewLlmProvider>['computeRequestSizes']>
+  overviewStarted: number
+  codeReviewStarted: number
+  qwenCliLog: string | null
+}> {
+  const llm = getReviewLlmProvider()
+  llm.assertReady()
+  if (llm.id === 'qwen-cli') {
+    input.qwenCliLog = input.qwenCliLog ?? { text: '' }
+  }
+  const requestSizes = llm.computeRequestSizes(input)
+
+  step('llm_overview', { model: rules.model, llmProvider: llm.id, ...logExtra })
+  const overviewStarted = Date.now()
+  const overview = await llm.runOverview(input)
+
+  step('llm_code_review', { model: rules.model, llmProvider: llm.id })
+  const codeReviewStarted = Date.now()
+  const findings = await llm.runCodeReview(input)
+
+  const qwenCliLog = llm.id === 'qwen-cli' ? (input.qwenCliLog?.text ?? null) : null
+  return { overview, findings, requestSizes, overviewStarted, codeReviewStarted, qwenCliLog }
 }
 
 async function processReview(reviewLogId: string, jobId: string | undefined): Promise<void> {
@@ -67,60 +114,106 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
 
   const provider = getProvider(repo.provider)
   const excludeGlobs = parseExcludeGlobs(rules.excludeGlobs)
+  const llm = getReviewLlmProvider()
 
-  step('fetch_diff', { excludeGlobCount: excludeGlobs.length, provider: repo.provider })
-  const diffStarted = Date.now()
-  const { diffText, headSha, changedPaths, fullFilesAttached } = await provider.buildMrDiff(
-    repo.accessToken,
-    repo.owner,
-    repo.name,
-    log.prNumber,
-    excludeGlobs,
-  )
-  workerLog.info(
-    {
-      event: 'review_diff_ready',
+  let headSha: string
+  let changedPaths: string[]
+  let llmInput: ReviewLlmInput
+
+  if (llm.id === 'qwen-cli') {
+    step('sync_repo_workspace', { excludeGlobCount: excludeGlobs.length, provider: repo.provider })
+    const syncStarted = Date.now()
+    const mrRef = await provider.getMrRef(repo.accessToken, repo.owner, repo.name, log.prNumber)
+    const sync = await syncWorkspace({
+      provider: repo.provider as ProviderId,
+      owner: repo.owner,
+      name: repo.name,
+      accessToken: repo.accessToken,
+      branch: mrRef.headBranch,
+      sha: mrRef.headSha,
+      baseSha: mrRef.baseSha,
+      excludeGlobs,
+    })
+    headSha = mrRef.headSha
+    changedPaths = sync.changedPaths
+    const workspace: ReviewWorkspaceContext = {
+      workspacePath: sync.workspacePath,
+      provider: repo.provider as ProviderId,
+      owner: repo.owner,
+      name: repo.name,
+      branch: mrRef.headBranch,
+      sha: mrRef.headSha,
+      prNumber: log.prNumber,
+      changedPaths,
+    }
+    llmInput = {
+      ...llmInputFromRules(rules, 'pr'),
+      workspace,
       reviewLogId,
-      jobId: jobId ?? null,
-      ms: Date.now() - diffStarted,
-      diffChars: diffText.length,
-      headSha: shortSha(headSha),
-      includeFullFileContent: includeFullFileContent(),
-      fullFilesAttached,
-    },
-    'diff fetched',
-  )
-
-  const baseUrl = process.env.OPENAI_BASE_URL?.trim()
-  const apiKey = process.env.OPENAI_API_KEY?.trim() || (baseUrl ? 'local' : '')
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not set (for a local OpenAI-compatible server set OPENAI_BASE_URL)')
+      onQwenCliLogUpdate: async (log) => {
+        await prisma.reviewLog.update({ where: { id: reviewLogId }, data: { qwenCliLog: log } })
+      },
+    }
+    workerLog.info(
+      {
+        event: 'repo_workspace_ready',
+        reviewLogId,
+        jobId: jobId ?? null,
+        ms: Date.now() - syncStarted,
+        cacheKey: sync.cacheKey,
+        cloned: sync.cloned,
+        headSha: shortSha(headSha),
+        changedPathCount: changedPaths.length,
+      },
+      'repo workspace synced',
+    )
+  } else {
+    step('fetch_diff', { excludeGlobCount: excludeGlobs.length, provider: repo.provider })
+    const diffStarted = Date.now()
+    const diff = await provider.buildMrDiff(
+      repo.accessToken,
+      repo.owner,
+      repo.name,
+      log.prNumber,
+      excludeGlobs,
+    )
+    headSha = diff.headSha
+    changedPaths = diff.changedPaths
+    const userContent = `Repository: ${repo.owner}/${repo.name}\nPR: #${log.prNumber}\n\n${fullFileContextHint()}${diff.diffText}`
+    llmInput = { ...llmInputFromRules(rules, 'pr'), userContent }
+    workerLog.info(
+      {
+        event: 'review_diff_ready',
+        reviewLogId,
+        jobId: jobId ?? null,
+        ms: Date.now() - diffStarted,
+        diffChars: diff.diffText.length,
+        headSha: shortSha(headSha),
+        includeFullFileContent: includeFullFileContent(),
+        fullFilesAttached: diff.fullFilesAttached,
+      },
+      'diff fetched',
+    )
   }
 
-  const userContent = `Repository: ${repo.owner}/${repo.name}\nPR: #${log.prNumber}\n\n${fullFileContextHint()}${diffText}`
-  const requestSizes = computeLlmRequestSizes(rules.systemPrompt, userContent)
-
-  step('llm_overview', { model: rules.model, hasOpenAiBaseUrl: Boolean(baseUrl) })
-  const overviewStarted = Date.now()
-  const overview = await runLlmOverview(apiKey, rules.model, rules.systemPrompt, userContent)
+  const { overview, findings, requestSizes, overviewStarted, codeReviewStarted, qwenCliLog } =
+    await runLlmReviewPhases(rules, llmInput, { reviewLogId, jobId: jobId ?? null }, step)
   workerLog.info(
     {
       event: 'review_llm_overview_done',
       reviewLogId,
       jobId: jobId ?? null,
+      llmProvider: llm.id,
       ms: Date.now() - overviewStarted,
     },
     'LLM overview phase done',
   )
-
-  step('llm_code_review', { model: rules.model })
-  const codeReviewStarted = Date.now()
-  const findings = await runLlmCodeReview(apiKey, rules.model, rules.systemPrompt, userContent)
   workerLog.info(
     {
       event: 'review_llm_code_review_done',
       reviewLogId,
       jobId: jobId ?? null,
+      llmProvider: llm.id,
       ms: Date.now() - codeReviewStarted,
       findingCount: findings.length,
     },
@@ -134,6 +227,7 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
       event: 'review_llm_done',
       reviewLogId,
       jobId: jobId ?? null,
+      llmProvider: llm.id,
       msOverview: Date.now() - overviewStarted,
       msCodeReview: Date.now() - codeReviewStarted,
       outputChars: rawOut.length,
@@ -170,6 +264,7 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
     data: {
       status: 'done',
       rawAiOutput: rawOut,
+      qwenCliLog: qwenCliLog ?? undefined,
       finishedAt: new Date(),
       commitSha: log.commitSha ?? headSha,
     },
@@ -293,71 +388,119 @@ async function processCommitBatchReview(commitBatchReviewId: string, jobId: stri
 
   const provider = getProvider(repo.provider)
   const excludeGlobs = parseExcludeGlobs(rules.excludeGlobs)
+  const llm = getReviewLlmProvider()
 
-  step('fetch_diff', { excludeGlobCount: excludeGlobs.length, provider: repo.provider })
-  const diffStarted = Date.now()
-  const { diffText, changedPaths, commitMessages, fullFilesAttached } = await provider.buildCommitBatchDiff(
-    repo.accessToken,
-    repo.owner,
-    repo.name,
-    shas,
-    excludeGlobs,
-  )
-  workerLog.info(
-    {
-      event: 'commit_review_diff_ready',
+  let changedPaths: string[]
+  let commitMessages: { sha: string; message: string }[] = []
+  let llmInput: ReviewLlmInput
+
+  if (llm.id === 'qwen-cli') {
+    step('sync_repo_workspace', { excludeGlobCount: excludeGlobs.length, provider: repo.provider })
+    const syncStarted = Date.now()
+    const headSha = shas[shas.length - 1]
+    const sync = await syncWorkspace({
+      provider: repo.provider as ProviderId,
+      owner: repo.owner,
+      name: repo.name,
+      accessToken: repo.accessToken,
+      branch: batch.branchName,
+      sha: headSha,
+      commitShas: shas,
+      excludeGlobs,
+    })
+    changedPaths = sync.changedPaths
+    const workspace: ReviewWorkspaceContext = {
+      workspacePath: sync.workspacePath,
+      provider: repo.provider as ProviderId,
+      owner: repo.owner,
+      name: repo.name,
+      branch: batch.branchName,
+      sha: headSha,
+      commitShas: shas,
+      changedPaths,
+    }
+    llmInput = {
+      ...llmInputFromRules(rules, 'batch'),
+      workspace,
       commitBatchReviewId,
-      jobId: jobId ?? null,
-      ms: Date.now() - diffStarted,
-      diffChars: diffText.length,
-      includeFullFileContent: includeFullFileContent(),
-      fullFilesAttached,
-    },
-    'commit diff fetched',
-  )
-
-  const baseUrl = process.env.OPENAI_BASE_URL?.trim()
-  const apiKey = process.env.OPENAI_API_KEY?.trim() || (baseUrl ? 'local' : '')
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not set (for a local OpenAI-compatible server set OPENAI_BASE_URL)')
+      onQwenCliLogUpdate: async (log) => {
+        await prisma.commitBatchReview.update({
+          where: { id: commitBatchReviewId },
+          data: { qwenCliLog: log },
+        })
+      },
+    }
+    workerLog.info(
+      {
+        event: 'repo_workspace_ready',
+        commitBatchReviewId,
+        jobId: jobId ?? null,
+        ms: Date.now() - syncStarted,
+        cacheKey: sync.cacheKey,
+        cloned: sync.cloned,
+        headSha: shortSha(headSha),
+        changedPathCount: changedPaths.length,
+      },
+      'repo workspace synced',
+    )
+  } else {
+    step('fetch_diff', { excludeGlobCount: excludeGlobs.length, provider: repo.provider })
+    const diffStarted = Date.now()
+    const diff = await provider.buildCommitBatchDiff(
+      repo.accessToken,
+      repo.owner,
+      repo.name,
+      shas,
+      excludeGlobs,
+    )
+    changedPaths = diff.changedPaths
+    commitMessages = diff.commitMessages
+    const commitList = commitMessages.map((c) => `- ${c.sha.slice(0, 7)}: ${c.message.split('\n')[0]}`).join('\n')
+    const userContent = [
+      `Repository: ${repo.owner}/${repo.name}`,
+      `Branch: ${batch.branchName}`,
+      `Author: ${batch.authorLogin}`,
+      `Period: ${batch.periodStart.toISOString()} — ${batch.periodEnd.toISOString()}`,
+      `Commits in this batch (${shas.length}):`,
+      commitList,
+      '',
+      DEFAULT_BATCH_OPENAI_USER_INTRO,
+      '',
+      fullFileContextHint() + diff.diffText,
+    ].join('\n')
+    llmInput = { ...llmInputFromRules(rules, 'batch'), userContent }
+    workerLog.info(
+      {
+        event: 'commit_review_diff_ready',
+        commitBatchReviewId,
+        jobId: jobId ?? null,
+        ms: Date.now() - diffStarted,
+        diffChars: diff.diffText.length,
+        includeFullFileContent: includeFullFileContent(),
+        fullFilesAttached: diff.fullFilesAttached,
+      },
+      'commit diff fetched',
+    )
   }
 
-  const commitList = commitMessages.map((c) => `- ${c.sha.slice(0, 7)}: ${c.message.split('\n')[0]}`).join('\n')
-  const userContent = [
-    `Repository: ${repo.owner}/${repo.name}`,
-    `Branch: ${batch.branchName}`,
-    `Author: ${batch.authorLogin}`,
-    `Period: ${batch.periodStart.toISOString()} — ${batch.periodEnd.toISOString()}`,
-    `Commits in this batch (${shas.length}):`,
-    commitList,
-    '',
-    'Review this set of commits (not a pull request). Summarize what was done across all commits, then analyze the combined code changes for bugs and issues.',
-    '',
-    fullFileContextHint() + diffText,
-  ].join('\n')
-  const requestSizes = computeLlmRequestSizes(rules.systemPrompt, userContent)
-
-  step('llm_overview', { model: rules.model, hasOpenAiBaseUrl: Boolean(baseUrl) })
-  const overviewStarted = Date.now()
-  const overview = await runLlmOverview(apiKey, rules.model, rules.systemPrompt, userContent)
+  const { overview, findings, requestSizes, overviewStarted, codeReviewStarted, qwenCliLog } =
+    await runLlmReviewPhases(rules, llmInput, { commitBatchReviewId, jobId: jobId ?? null }, step)
   workerLog.info(
     {
       event: 'commit_review_llm_overview_done',
       commitBatchReviewId,
       jobId: jobId ?? null,
+      llmProvider: llm.id,
       ms: Date.now() - overviewStarted,
     },
     'LLM overview phase done',
   )
-
-  step('llm_code_review', { model: rules.model })
-  const codeReviewStarted = Date.now()
-  const findings = await runLlmCodeReview(apiKey, rules.model, rules.systemPrompt, userContent)
   workerLog.info(
     {
       event: 'commit_review_llm_code_review_done',
       commitBatchReviewId,
       jobId: jobId ?? null,
+      llmProvider: llm.id,
       ms: Date.now() - codeReviewStarted,
       findingCount: findings.length,
     },
@@ -366,6 +509,22 @@ async function processCommitBatchReview(commitBatchReviewId: string, jobId: stri
 
   const ai = normalizeFindingPaths({ overview, findings }, changedPaths)
   const rawOut = JSON.stringify(ai)
+
+  if (llm.id === 'qwen-cli' && commitMessages.length === 0) {
+    const providerForCommits = getProvider(repo.provider)
+    try {
+      const diff = await providerForCommits.buildCommitBatchDiff(
+        repo.accessToken,
+        repo.owner,
+        repo.name,
+        shas,
+        excludeGlobs,
+      )
+      commitMessages = diff.commitMessages
+    } catch {
+      commitMessages = shas.map((sha) => ({ sha, message: '' }))
+    }
+  }
 
   const commitMetas = shas.map((sha) => {
     const meta = commitMessages.find((m) => m.sha === sha)
@@ -395,6 +554,7 @@ async function processCommitBatchReview(commitBatchReviewId: string, jobId: stri
       status: 'done',
       rawAiOutput: rawOut,
       mdContent,
+      qwenCliLog: qwenCliLog ?? undefined,
       finishedAt: new Date(),
     },
   })
@@ -492,15 +652,25 @@ commitWorker.on('failed', async (job, err) => {
   })
 })
 
-workerLog.info(
-  {
-    event: 'worker_started',
-    queue: PR_REVIEW_QUEUE,
-    commitQueue: COMMIT_REVIEW_QUEUE,
-    redisHost: redisConnection.host,
-    redisPort: redisConnection.port,
-    hasOpenAiKey: Boolean(process.env.OPENAI_API_KEY?.trim()),
-    hasOpenAiBaseUrl: Boolean(process.env.OPENAI_BASE_URL?.trim()),
-  },
-  'PR and commit review workers started',
-)
+void (async () => {
+  try {
+    await assertReviewLlmReady()
+    workerLog.info(
+      {
+        event: 'worker_started',
+        queue: PR_REVIEW_QUEUE,
+        commitQueue: COMMIT_REVIEW_QUEUE,
+        redisHost: redisConnection.host,
+        redisPort: redisConnection.port,
+        ...getReviewLlmStartupInfo(),
+      },
+      'PR and commit review workers started',
+    )
+  } catch (err) {
+    workerLog.error(
+      { err, event: 'worker_startup_failed', llmProvider: resolveLlmProviderId() },
+      'worker LLM provider configuration invalid',
+    )
+    process.exit(1)
+  }
+})()

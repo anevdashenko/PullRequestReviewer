@@ -154,6 +154,20 @@ export const gitlabProvider: VcsProvider = {
     }))
   },
 
+  async getMrRef(accessToken, owner, name, mrNumber) {
+    const api = gitlabClient(accessToken)
+    const projectId = projectPath(owner, name)
+    const mr = await api.MergeRequests.show(projectId, mrNumber)
+    const headSha = typeof mr.sha === 'string' ? mr.sha : ''
+    const headBranch = typeof mr.source_branch === 'string' ? mr.source_branch : ''
+    const diffRefs = mr.diff_refs as { base_sha?: string; start_sha?: string } | undefined
+    const baseSha = diffRefs?.base_sha ?? diffRefs?.start_sha ?? ''
+    if (!headSha || !headBranch || !baseSha) {
+      throw new Error(`GitLab MR !${mrNumber} missing source branch or base SHA`)
+    }
+    return { headSha, headBranch, baseSha }
+  },
+
   async buildMrDiff(accessToken, owner, name, mrNumber, excludeGlobs) {
     const api = gitlabClient(accessToken)
     const projectId = projectPath(owner, name)

@@ -1,0 +1,21 @@
+{
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "deepseek-coder-v2-lite-instruct-mlx",
+        "name": "deepseek-coder-v2-lite-instruct-mlx",
+        "baseUrl": "http://host.docker.internal:1234/v1",
+        "description": "Local OpenAI-compatible server (LM Studio, vLLM, etc.)",
+        "envKey": "OPENAI_API_KEY"
+      }
+    ]
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "model": {
+    "name": "deepseek-coder-v2-lite-instruct-mlx"
+  }
+}

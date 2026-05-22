@@ -26,12 +26,20 @@ model Repository {
 }
 
 model ReviewRule {
-  id           String     @id @default(cuid())
-  repoId       String     @unique
-  repository   Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
-  systemPrompt String     @db.Text
-  excludeGlobs Json       @default("[]")
-  model        String     @default("gpt-4o-mini")
+  id                      String     @id @default(cuid())
+  repoId                  String     @unique
+  repository              Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  systemPrompt            String     @db.Text
+  prOverviewPrompt        String?    @db.Text
+  prCodeReviewPrompt      String?    @db.Text
+  batchOverviewPrompt     String?    @db.Text
+  batchCodeReviewPrompt   String?    @db.Text
+  overviewJsonPrompt      String?    @db.Text
+  codeReviewJsonPrompt    String?    @db.Text
+  batchOverviewJsonPrompt String?    @db.Text
+  batchCodeReviewJsonPrompt String?  @db.Text
+  excludeGlobs            Json       @default("[]")
+  model                   String     @default("gpt-4o-mini")
 }
 
 model ReviewLog {
@@ -43,6 +51,7 @@ model ReviewLog {
   status       String
   errorMessage String?    @db.Text
   rawAiOutput  String?    @db.Text
+  qwenCliLog   String?    @db.Text
   createdAt    DateTime   @default(now())
   finishedAt   DateTime?
 
@@ -64,6 +73,7 @@ model CommitBatchReview {
   mdContent       String?          @db.Text
   rawAiOutput     String?          @db.Text
   errorMessage    String?          @db.Text
+  qwenCliLog      String?          @db.Text
   createdAt       DateTime         @default(now())
   finishedAt      DateTime?
   reviewedCommits ReviewedCommit[]

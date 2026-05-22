@@ -1,0 +1,21 @@
+{
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "qwen2.5-coder-7b-instruct",
+        "name": "qwen2.5-coder-7b-instruct",
+        "baseUrl": "http://host.docker.internal:1234/v1",
+        "description": "Local OpenAI-compatible server (LM Studio, vLLM, etc.)",
+        "envKey": "OPENAI_API_KEY"
+      }
+    ]
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "model": {
+    "name": "qwen2.5-coder-7b-instruct"
+  }
+}

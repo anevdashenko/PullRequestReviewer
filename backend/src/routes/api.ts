@@ -3,9 +3,9 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '../db.js'
 import { clearCommitReviewsForRepo } from '../lib/clear-commit-reviews.js'
 import { DEFAULT_MODEL } from '../lib/defaults.js'
+import { reviewRulesPutData, reviewRulesToApi, type ReviewRulesPutBody } from '../lib/review-llm/api-prompt-fields.js'
+import { DEFAULT_SYSTEM_PROMPT } from '../lib/review-llm/prompt-defaults.js'
 import { isProviderId, normalizeProviderId } from '../providers/index.js'
-
-const DEFAULT_PROMPT = `You are an expert code reviewer. Focus on bugs, security, performance, readability, and maintainability. Be concise and actionable.`
 
 function parseExcludeGlobs(value: unknown): string[] {
   if (!Array.isArray(value)) return []
@@ -107,7 +107,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         await tx.reviewRule.create({
           data: {
             repoId: created.id,
-            systemPrompt: DEFAULT_PROMPT,
+            systemPrompt: DEFAULT_SYSTEM_PROMPT,
             excludeGlobs: [],
             model: modelName,
           },
@@ -150,9 +150,8 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       commitReviewEnabled: r.commitReviewEnabled,
       rules: r.rules
         ? {
-            systemPrompt: r.rules.systemPrompt,
+            ...reviewRulesToApi(r.rules),
             excludeGlobs: parseExcludeGlobs(r.rules.excludeGlobs),
-            model: r.rules.model,
           }
         : null,
     }
@@ -204,25 +203,18 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     }
   })
 
-  app.put<{
-    Params: { id: string }
-    Body: { systemPrompt?: string; excludeGlobs?: string[]; model?: string }
-  }>('/repos/:id/rules', async (req, reply) => {
-    const { systemPrompt, excludeGlobs, model } = req.body
-    req.log.info({ event: 'rules_put', repoId: req.params.id, keys: Object.keys(req.body ?? {}) }, 'PUT /repos/:id/rules')
+  app.put<{ Params: { id: string }; Body: ReviewRulesPutBody }>('/repos/:id/rules', async (req, reply) => {
+    const body = req.body ?? {}
+    req.log.info({ event: 'rules_put', repoId: req.params.id, keys: Object.keys(body) }, 'PUT /repos/:id/rules')
     const repo = await prisma.repository.findUnique({ where: { id: req.params.id } })
     if (!repo) {
       req.log.warn({ event: 'rules_put', repoId: req.params.id, outcome: 'not_found' }, 'PUT /repos/:id/rules')
       return reply.code(404).send({ error: 'Not found' })
     }
-    const data: {
-      systemPrompt?: string
-      excludeGlobs?: Prisma.InputJsonValue
-      model?: string
-    } = {}
-    if (typeof systemPrompt === 'string') data.systemPrompt = systemPrompt
-    if (Array.isArray(excludeGlobs)) data.excludeGlobs = excludeGlobs as Prisma.InputJsonValue
-    if (typeof model === 'string' && model.trim()) data.model = model.trim()
+    const data = reviewRulesPutData(body)
+    if (Array.isArray(body.excludeGlobs)) {
+      data.excludeGlobs = body.excludeGlobs as Prisma.InputJsonValue
+    }
     if (Object.keys(data).length === 0) {
       req.log.warn({ event: 'rules_put', repoId: req.params.id, outcome: 'empty_body' }, 'PUT /repos/:id/rules')
       return reply.code(400).send({ error: 'Nothing to update' })
@@ -231,9 +223,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       where: { repoId: repo.id },
       create: {
         repoId: repo.id,
-        systemPrompt: typeof systemPrompt === 'string' ? systemPrompt : DEFAULT_PROMPT,
-        excludeGlobs: Array.isArray(excludeGlobs) ? excludeGlobs : [],
-        model: typeof model === 'string' && model.trim() ? model.trim() : DEFAULT_MODEL,
+        systemPrompt: typeof body.systemPrompt === 'string' ? body.systemPrompt : DEFAULT_SYSTEM_PROMPT,
+        excludeGlobs: Array.isArray(body.excludeGlobs) ? body.excludeGlobs : [],
+        model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : DEFAULT_MODEL,
+        ...data,
       },
       update: data,
     })
@@ -260,7 +253,19 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         },
       })
       req.log.info({ event: 'repo_logs', repoId: req.params.id, count: logs.length }, 'GET /repos/:id/logs done')
-      return logs
+      return logs.map((row) => ({
+        id: row.id,
+        repoId: row.repoId,
+        prNumber: row.prNumber,
+        commitSha: row.commitSha,
+        status: row.status,
+        errorMessage: row.errorMessage,
+        hasQwenCliLog: Boolean(row.qwenCliLog),
+        hasRawAiOutput: Boolean(row.rawAiOutput),
+        createdAt: row.createdAt,
+        finishedAt: row.finishedAt,
+        repository: row.repository,
+      }))
     },
   )
 
@@ -394,6 +399,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       seenByUser: review.seenByUser,
       mdContent: review.mdContent,
       errorMessage: review.errorMessage,
+      qwenCliLog: review.qwenCliLog,
       createdAt: review.createdAt,
       finishedAt: review.finishedAt,
     }
@@ -419,6 +425,32 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
+  app.get<{ Params: { id: string } }>('/review-logs/:id', async (req, reply) => {
+    req.log.info({ event: 'review_log_get', reviewLogId: req.params.id }, 'GET /review-logs/:id')
+    const log = await prisma.reviewLog.findUnique({
+      where: { id: req.params.id },
+      include: {
+        repository: { select: { id: true, owner: true, name: true, provider: true } },
+      },
+    })
+    if (!log) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    return {
+      id: log.id,
+      repoId: log.repoId,
+      repository: log.repository,
+      prNumber: log.prNumber,
+      commitSha: log.commitSha,
+      status: log.status,
+      errorMessage: log.errorMessage,
+      rawAiOutput: log.rawAiOutput,
+      qwenCliLog: log.qwenCliLog,
+      createdAt: log.createdAt,
+      finishedAt: log.finishedAt,
+    }
+  })
+
   app.get<{ Querystring: { repoId?: string; limit?: string } }>('/logs', async (req) => {
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit ?? '100', 10) || 100))
     const where = req.query.repoId ? { repoId: req.query.repoId } : {}
@@ -432,6 +464,18 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       },
     })
     req.log.info({ event: 'logs_all', count: rows.length }, 'GET /logs done')
-    return rows
+    return rows.map((row) => ({
+      id: row.id,
+      repoId: row.repoId,
+      prNumber: row.prNumber,
+      commitSha: row.commitSha,
+      status: row.status,
+      errorMessage: row.errorMessage,
+      hasQwenCliLog: Boolean(row.qwenCliLog),
+      hasRawAiOutput: Boolean(row.rawAiOutput),
+      createdAt: row.createdAt,
+      finishedAt: row.finishedAt,
+      repository: row.repository,
+    }))
   })
 }

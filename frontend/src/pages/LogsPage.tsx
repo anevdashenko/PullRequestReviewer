@@ -10,7 +10,8 @@ type LogRow = {
   commitSha: string | null
   status: string
   errorMessage: string | null
-  rawAiOutput: string | null
+  hasQwenCliLog?: boolean
+  hasRawAiOutput?: boolean
   createdAt: string
   finishedAt: string | null
   repository?: { owner: string; name: string; provider?: string }
@@ -28,6 +29,10 @@ export default function LogsPage() {
       .then(setRows)
       .catch((e: Error) => setError(e.message))
   }, [repoId])
+
+  function logDetailPath(id: string): string {
+    return repoId ? `/repos/${repoId}/logs/${id}` : `/logs/${id}`
+  }
 
   return (
     <>
@@ -75,7 +80,22 @@ export default function LogsPage() {
                     <td>{r.status}</td>
                     <td className="mono" style={{ maxWidth: 360 }}>
                       {r.errorMessage && <span className="error">{r.errorMessage}</span>}
-                      {r.rawAiOutput && !r.errorMessage && <span title={r.rawAiOutput}>AI output stored</span>}
+                      {!r.errorMessage && (
+                        <span>
+                          {r.hasQwenCliLog && (
+                            <>
+                              <Link to={logDetailPath(r.id)}>Qwen log</Link>
+                              {(r.hasRawAiOutput || r.status === 'running') && ' · '}
+                            </>
+                          )}
+                          {r.status === 'running' && !r.hasQwenCliLog && (
+                            <Link to={logDetailPath(r.id)}>View (running)</Link>
+                          )}
+                          {r.hasRawAiOutput && !r.hasQwenCliLog && (
+                            <Link to={logDetailPath(r.id)}>AI output</Link>
+                          )}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 )

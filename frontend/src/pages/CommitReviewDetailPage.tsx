@@ -19,6 +19,7 @@ type ReviewDetail = {
   seenByUser: boolean
   mdContent: string | null
   errorMessage: string | null
+  qwenCliLog: string | null
   createdAt: string
   finishedAt: string | null
 }
@@ -128,15 +129,23 @@ export default function CommitReviewDetailPage() {
             {review.errorMessage && <p className="error">{review.errorMessage}</p>}
           </div>
 
+          {review.qwenCliLog && (
+            <div className="card">
+              <h2 style={{ marginTop: 0 }}>Qwen CLI log</h2>
+              <p className="muted">Captured during overview and code review. Refresh while running to see updates.</p>
+              <pre className="log-viewer">{review.qwenCliLog}</pre>
+            </div>
+          )}
+
           {review.status === 'done' && review.mdContent ? (
             <div className="card markdown-body">
               <ReactMarkdown>{review.mdContent}</ReactMarkdown>
             </div>
-          ) : review.status !== 'done' ? (
+          ) : review.status !== 'done' && !review.qwenCliLog ? (
             <div className="card">
               <p>Review is not ready yet ({review.status}).</p>
             </div>
-          ) : (
+          ) : review.status !== 'done' ? null : (
             <div className="card">
               <p>No markdown content stored.</p>
             </div>

@@ -11,6 +11,12 @@ export type MrDiffResult = {
   fullFilesAttached: number
 }
 
+export type MrRefInfo = {
+  headSha: string
+  headBranch: string
+  baseSha: string
+}
+
 export type OpenMr = {
   number: number
   headSha: string | null
@@ -43,6 +49,7 @@ export interface VcsProvider {
   verifyWebhook(req: FastifyRequest, secret: string, rawBody?: Buffer): boolean
   parseMrWebhook(body: unknown, headers: Record<string, string | string[] | undefined>): ParsedMrWebhook | null
   listOpenMrs(accessToken: string, owner: string, name: string): Promise<OpenMr[]>
+  getMrRef(accessToken: string, owner: string, name: string, mrNumber: number): Promise<MrRefInfo>
   buildMrDiff(
     accessToken: string,
     owner: string,

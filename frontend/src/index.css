@@ -24,6 +24,25 @@ code {
   border-radius: 4px;
 }
 
+.muted {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.log-viewer {
+  margin: 0;
+  max-height: 480px;
+  overflow: auto;
+  padding: 0.75rem 1rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .app-shell {
   max-width: 960px;
   margin: 0 auto;
