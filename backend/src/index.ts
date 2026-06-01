@@ -37,6 +37,11 @@ await app.register(registerWebhookRoutes)
 const port = Number(process.env.PORT ?? 3000)
 const host = process.env.HOST ?? '0.0.0.0'
 
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  app.log.error({ port: process.env.PORT }, 'invalid PORT — use 1–65535')
+  process.exit(1)
+}
+
 try {
   await connectDatabase()
   app.log.info('database connected')

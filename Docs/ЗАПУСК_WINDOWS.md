@@ -1,6 +1,6 @@
 # Запуск приложения локально на Windows
 
-Инструкция для **Pull Request Reviewer**: API на порту **3000**, админка (опционально) на **5173**, база и Redis в Docker.
+Инструкция для **Pull Request Reviewer**: API на порту **3000**, админка (опционально) на **3001**, база и Redis в Docker.
 
 ## Что установить заранее
 
@@ -68,7 +68,7 @@ npm install
 npm run dev
 ```
 
-Откройте в браузере: **http://localhost:5173**
+Откройте в браузере: **http://localhost:3001**
 
 1. В шапке в поле **Admin key** вставьте **то же значение**, что в `ADMIN_API_KEY` в `.env`, нажмите **Save**.
 2. На странице репозиториев добавьте GitHub-репозиторий (owner, name, токен, секрет вебхука).
@@ -77,15 +77,22 @@ npm run dev
 
 ## Порты и конфликты
 
-Если что-то уже слушает порты, `docker compose` может упасть с ошибкой «port is already allocated»:
+Порты задаются в корневом `.env` (см. `.env.example`):
 
-| Порт | Сервис |
-|------|--------|
-| 3000 | API |
-| 5432 | PostgreSQL в контейнере |
-| 6379 | Redis |
+| Переменная | По умолчанию | Сервис |
+|------------|--------------|--------|
+| `PORT` | 3000 | API (backend, Docker `api`) |
+| `FRONTEND_DEV_PORT` | 3001 | Vite (`npm run dev`) |
+| `POSTGRES_HOST_PORT` | 15432 | PostgreSQL на хосте → 5432 в контейнере |
+| `REDIS_HOST_PORT` | 16379 | Redis на хосте → 6379 в контейнере |
 
-Закройте конфликтующую программу или измените проброс портов в `docker-compose.yml` (секция `ports:`).
+Стандартные **5432** и **6379** на Windows часто заняты диапазоном Hyper-V (~5147–5846). Если `docker compose` падает с `bind: ... forbidden`, оставьте порты из `.env.example` или задайте свои вне этого диапазона.
+
+Если гоняете бэкенд **на хосте**, в `.env` должны совпадать `DATABASE_URL` / `REDIS_URL` с `POSTGRES_HOST_PORT` / `REDIS_HOST_PORT`.
+
+Если меняете `PORT`, обновите `PUBLIC_API_URL` и `VITE_PUBLIC_API_URL` (в `frontend/.env`) на тот же хост:порт.
+
+Если что-то уже слушает порты, `docker compose` может упасть с ошибкой «port is already allocated» — закройте конфликтующую программу или смените `PORT` / `FRONTEND_DEV_PORT` в `.env`.
 
 ## Вебхуки GitHub с вашего ПК
 

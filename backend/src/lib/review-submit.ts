@@ -1,6 +1,12 @@
 import { Octokit } from '@octokit/rest'
 import type { AiReviewResult, LlmRequestSizes } from './llm.js'
-import { formatCodeReviewBlock, formatLlmRequestSizeNote, formatOverviewBlock } from './review-format.js'
+import type { PipelineStepResult } from './review-llm/review-pipeline.js'
+import {
+  formatCodeReviewBlock,
+  formatLlmRequestSizeNote,
+  formatOverviewBlock,
+  formatPipelineRequestSizeNote,
+} from './review-format.js'
 
 /** Shown in collapsed summary lines on GitHub (also used for search/filter). */
 export const AI_REVIEW_TAG = '#AI review'
@@ -20,21 +26,26 @@ export function formatReviewBody(ai: AiReviewResult, sizes?: LlmRequestSizes): s
   return parts.join('\n\n')
 }
 
+export function formatPipelineReviewBody(steps: PipelineStepResult[], sizes?: LlmRequestSizes): string {
+  const parts = steps.map((s) => collapseBlock(`${AI_REVIEW_TAG} — ${s.name}`, s.output))
+  if (sizes) parts.push(formatPipelineRequestSizeNote(steps.length, sizes))
+  return parts.join('\n\n')
+}
+
 export async function submitGithubReview(
   octokit: Octokit,
   owner: string,
   repo: string,
   pullNumber: number,
   commitId: string,
-  ai: AiReviewResult,
-  sizes?: LlmRequestSizes,
+  body: string,
 ): Promise<void> {
   await octokit.pulls.createReview({
     owner,
     repo,
     pull_number: pullNumber,
     commit_id: commitId,
-    body: formatReviewBody(ai, sizes),
+    body,
     event: 'COMMENT',
   })
 }

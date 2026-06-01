@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "steps": [
+    {
+      "id": "overview",
+      "name": "Overview for reviewer",
+      "enabled": true,
+      "prompt": "You prepare human reviewers to triage a pull request before deep code review.\nDescribe what changed, which parts of the project are affected, what to focus on, which files or areas to read first, and a practical reviewer checklist. Be concise and actionable.\n\nRespond with a single JSON object only (no markdown), shape:\n{\"whatChanged\":\"concise summary of what this PR does\",\"affectedAreas\":[\"project areas or modules touched\"],\"focusForReviewer\":\"what deserves the most scrutiny and why\",\"priorityReview\":[\"files or code areas to read first — use paths from the diff when possible\"],\"checklist\":[\"actionable reviewer checklist items\"]}\nBase everything on the diff. Do not invent files. Max 8 items per array.\nDo not ask questions. Output the JSON object as your entire final message.\nBase everything on actual changes in this revision. Do not invent files."
+    },
+    {
+      "id": "code-review",
+      "name": "Code review",
+      "enabled": true,
+      "prompt": "You are an expert code reviewer. Focus on bugs, security, performance, readability, extensibility, and maintainability. Be concise and actionable.\n\nRespond with a single JSON object only (no markdown), shape:\n{\"findings\":[{\"severity\":\"info|warning|error\",\"path\":\"relative .cs file path from the diff\",\"comment\":\"short actionable note\"}]}\nOnly comment on .cs files present in the diff. Do not use line numbers. Group multiple notes per file as separate findings with the same path. Max 20 findings.\nFocus on potential bugs and errors, readability, extensibility, and performance.\nDo not ask questions. Output the JSON object as your entire final message.\nOnly comment on .cs files present in the change set."
+    }
+  ]
+}

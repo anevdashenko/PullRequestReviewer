@@ -7,7 +7,7 @@ import {
   type CommitReviewJobData,
   type ReviewJobData,
 } from './queue.js'
-import { formatCommitReviewMarkdown } from './lib/commit-review-format.js'
+import { formatCommitPipelineMarkdown, formatCommitReviewMarkdown } from './lib/commit-review-format.js'
 import { normalizeFindingPaths } from './lib/diff-lines.js'
 import { includeFullFileContent } from './lib/defaults.js'
 import { syncWorkspace } from './lib/repo-cache/index.js'
@@ -20,6 +20,15 @@ import {
 import type { ReviewLlmInput, ReviewWorkspaceContext } from './lib/review-llm/index.js'
 import { reviewRuleToPrompts } from './lib/review-llm/prompt-fields.js'
 import { DEFAULT_BATCH_OPENAI_USER_INTRO } from './lib/review-llm/prompt-defaults.js'
+import {
+  computePipelineRequestSizes,
+  resolveReviewPipeline,
+} from './lib/review-llm/review-pipeline.js'
+import {
+  computeQwenPipelineRequestSizes,
+  runReviewPipelineSteps,
+} from './lib/review-llm/qwen-cli-provider.js'
+import { formatPipelineReviewBody, formatReviewBody } from './lib/review-submit.js'
 import type { ReviewRule } from '@prisma/client'
 import { workerLog, shortSha } from './lib/logger.js'
 import { getProvider } from './providers/index.js'
@@ -196,45 +205,79 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
     )
   }
 
-  const { overview, findings, requestSizes, overviewStarted, codeReviewStarted, qwenCliLog } =
-    await runLlmReviewPhases(rules, llmInput, { reviewLogId, jobId: jobId ?? null }, step)
-  workerLog.info(
-    {
-      event: 'review_llm_overview_done',
-      reviewLogId,
-      jobId: jobId ?? null,
-      llmProvider: llm.id,
-      ms: Date.now() - overviewStarted,
-    },
-    'LLM overview phase done',
-  )
-  workerLog.info(
-    {
-      event: 'review_llm_code_review_done',
-      reviewLogId,
-      jobId: jobId ?? null,
-      llmProvider: llm.id,
-      ms: Date.now() - codeReviewStarted,
-      findingCount: findings.length,
-    },
-    'LLM code review phase done',
-  )
+  let rawOut: string
+  let reviewBody: string
+  let qwenCliLog: string | null = null
 
-  const ai = normalizeFindingPaths({ overview, findings }, changedPaths)
-  const rawOut = JSON.stringify(ai)
-  workerLog.info(
-    {
-      event: 'review_llm_done',
-      reviewLogId,
-      jobId: jobId ?? null,
-      llmProvider: llm.id,
-      msOverview: Date.now() - overviewStarted,
-      msCodeReview: Date.now() - codeReviewStarted,
-      outputChars: rawOut.length,
-      ...requestSizes,
-    },
-    'LLM review phases completed',
-  )
+  if (llm.id === 'qwen-cli') {
+    llm.assertReady()
+    llmInput.qwenCliLog = llmInput.qwenCliLog ?? { text: '' }
+    const pipeline = resolveReviewPipeline(rules.reviewPipeline)
+    const pipelineStarted = Date.now()
+    const stepResults = await runReviewPipelineSteps(pipeline, rules.systemPrompt, llmInput, step)
+    const requestSizes = computeQwenPipelineRequestSizes(pipeline, rules.systemPrompt, llmInput)
+    reviewBody = formatPipelineReviewBody(stepResults, requestSizes)
+    rawOut = JSON.stringify({ pipeline: stepResults })
+    qwenCliLog = llmInput.qwenCliLog?.text ?? null
+    workerLog.info(
+      {
+        event: 'review_pipeline_done',
+        reviewLogId,
+        jobId: jobId ?? null,
+        llmProvider: llm.id,
+        ms: Date.now() - pipelineStarted,
+        stepCount: stepResults.length,
+        outputChars: rawOut.length,
+        ...requestSizes,
+      },
+      'LLM review pipeline completed',
+    )
+  } else {
+    const { overview, findings, requestSizes, overviewStarted, codeReviewStarted } = await runLlmReviewPhases(
+      rules,
+      llmInput,
+      { reviewLogId, jobId: jobId ?? null },
+      step,
+    )
+    workerLog.info(
+      {
+        event: 'review_llm_overview_done',
+        reviewLogId,
+        jobId: jobId ?? null,
+        llmProvider: llm.id,
+        ms: Date.now() - overviewStarted,
+      },
+      'LLM overview phase done',
+    )
+    workerLog.info(
+      {
+        event: 'review_llm_code_review_done',
+        reviewLogId,
+        jobId: jobId ?? null,
+        llmProvider: llm.id,
+        ms: Date.now() - codeReviewStarted,
+        findingCount: findings.length,
+      },
+      'LLM code review phase done',
+    )
+
+    const ai = normalizeFindingPaths({ overview, findings }, changedPaths)
+    rawOut = JSON.stringify(ai)
+    reviewBody = formatReviewBody(ai, requestSizes)
+    workerLog.info(
+      {
+        event: 'review_llm_done',
+        reviewLogId,
+        jobId: jobId ?? null,
+        llmProvider: llm.id,
+        msOverview: Date.now() - overviewStarted,
+        msCodeReview: Date.now() - codeReviewStarted,
+        outputChars: rawOut.length,
+        ...requestSizes,
+      },
+      'LLM review phases completed',
+    )
+  }
 
   step('submit_review', { provider: repo.provider })
   const submitStarted = Date.now()
@@ -244,8 +287,7 @@ async function processReview(reviewLogId: string, jobId: string | undefined): Pr
     repo.name,
     log.prNumber,
     headSha,
-    ai,
-    requestSizes,
+    reviewBody,
   )
   workerLog.info(
     {
@@ -483,32 +525,9 @@ async function processCommitBatchReview(commitBatchReviewId: string, jobId: stri
     )
   }
 
-  const { overview, findings, requestSizes, overviewStarted, codeReviewStarted, qwenCliLog } =
-    await runLlmReviewPhases(rules, llmInput, { commitBatchReviewId, jobId: jobId ?? null }, step)
-  workerLog.info(
-    {
-      event: 'commit_review_llm_overview_done',
-      commitBatchReviewId,
-      jobId: jobId ?? null,
-      llmProvider: llm.id,
-      ms: Date.now() - overviewStarted,
-    },
-    'LLM overview phase done',
-  )
-  workerLog.info(
-    {
-      event: 'commit_review_llm_code_review_done',
-      commitBatchReviewId,
-      jobId: jobId ?? null,
-      llmProvider: llm.id,
-      ms: Date.now() - codeReviewStarted,
-      findingCount: findings.length,
-    },
-    'LLM code review phase done',
-  )
-
-  const ai = normalizeFindingPaths({ overview, findings }, changedPaths)
-  const rawOut = JSON.stringify(ai)
+  let rawOut: string
+  let mdContent: string
+  let qwenCliLog: string | null = null
 
   if (llm.id === 'qwen-cli' && commitMessages.length === 0) {
     const providerForCommits = getProvider(repo.provider)
@@ -535,17 +554,86 @@ async function processCommitBatchReview(commitBatchReviewId: string, jobId: stri
     }
   })
 
-  const mdContent = formatCommitReviewMarkdown(
-    repo.owner,
-    repo.name,
-    batch.branchName,
-    batch.authorLogin,
-    batch.periodStart,
-    batch.periodEnd,
-    commitMetas,
-    ai,
-    requestSizes,
-  )
+  if (llm.id === 'qwen-cli') {
+    llm.assertReady()
+    llmInput.qwenCliLog = llmInput.qwenCliLog ?? { text: '' }
+    const pipeline = resolveReviewPipeline(rules.reviewPipeline)
+    const pipelineStarted = Date.now()
+    const stepResults = await runReviewPipelineSteps(pipeline, rules.systemPrompt, llmInput, step)
+    const requestSizes = computePipelineRequestSizes(
+      pipeline,
+      rules.systemPrompt,
+      llmInput.workspace!,
+    )
+    rawOut = JSON.stringify({ pipeline: stepResults })
+    qwenCliLog = llmInput.qwenCliLog?.text ?? null
+    mdContent = formatCommitPipelineMarkdown(
+      repo.owner,
+      repo.name,
+      batch.branchName,
+      batch.authorLogin,
+      batch.periodStart,
+      batch.periodEnd,
+      commitMetas,
+      stepResults,
+      requestSizes,
+    )
+    workerLog.info(
+      {
+        event: 'commit_review_pipeline_done',
+        commitBatchReviewId,
+        jobId: jobId ?? null,
+        llmProvider: llm.id,
+        ms: Date.now() - pipelineStarted,
+        stepCount: stepResults.length,
+        outputChars: rawOut.length,
+        ...requestSizes,
+      },
+      'LLM review pipeline completed',
+    )
+  } else {
+    const { overview, findings, requestSizes, overviewStarted, codeReviewStarted } = await runLlmReviewPhases(
+      rules,
+      llmInput,
+      { commitBatchReviewId, jobId: jobId ?? null },
+      step,
+    )
+    workerLog.info(
+      {
+        event: 'commit_review_llm_overview_done',
+        commitBatchReviewId,
+        jobId: jobId ?? null,
+        llmProvider: llm.id,
+        ms: Date.now() - overviewStarted,
+      },
+      'LLM overview phase done',
+    )
+    workerLog.info(
+      {
+        event: 'commit_review_llm_code_review_done',
+        commitBatchReviewId,
+        jobId: jobId ?? null,
+        llmProvider: llm.id,
+        ms: Date.now() - codeReviewStarted,
+        findingCount: findings.length,
+      },
+      'LLM code review phase done',
+    )
+
+    const ai = normalizeFindingPaths({ overview, findings }, changedPaths)
+    rawOut = JSON.stringify(ai)
+    mdContent = formatCommitReviewMarkdown(
+      repo.owner,
+      repo.name,
+      batch.branchName,
+      batch.authorLogin,
+      batch.periodStart,
+      batch.periodEnd,
+      commitMetas,
+      ai,
+      requestSizes,
+    )
+  }
 
   step('mark_done')
   await prisma.commitBatchReview.update({

@@ -14,6 +14,13 @@ export function formatLlmRequestSizeNote(sizes: LlmRequestSizes): string {
   )
 }
 
+export function formatPipelineRequestSizeNote(stepCount: number, sizes: LlmRequestSizes): string {
+  return (
+    `_LLM request size (characters, approximate; ${stepCount} pipeline step(s)): ` +
+    `total prompt ${fmtChars(sizes.totalInputChars)}._`
+  )
+}
+
 export function formatOverviewBlock(overview: AiReviewResult['overview']): string {
   const parts: string[] = []
 

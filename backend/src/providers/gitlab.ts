@@ -8,7 +8,6 @@ import {
   type FileChangeStatus,
 } from '../lib/diff-content.js'
 import { fetchGitlabFileAtRef } from '../lib/gitlab-file-content.js'
-import { formatReviewBody } from '../lib/review-submit.js'
 import type { CommitBatchDiffResult, PolledCommit, VcsProvider } from './types.js'
 const GITLAB_HOST = 'https://gitlab.com'
 
@@ -190,10 +189,10 @@ export const gitlabProvider: VcsProvider = {
     return { diffText, headSha, changedPaths, fullFilesAttached: state.fullFilesAttached }
   },
 
-  async submitMrReview(accessToken, owner, name, mrNumber, _headSha, ai, requestSizes) {
+  async submitMrReview(accessToken, owner, name, mrNumber, _headSha, reviewBody) {
     const api = gitlabClient(accessToken)
     const projectId = projectPath(owner, name)
-    await api.MergeRequestNotes.create(projectId, mrNumber, formatReviewBody(ai, requestSizes))
+    await api.MergeRequestNotes.create(projectId, mrNumber, reviewBody)
   },
 
   async getDefaultBranch(accessToken, owner, name) {

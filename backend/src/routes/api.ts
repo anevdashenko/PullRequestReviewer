@@ -5,6 +5,7 @@ import { clearCommitReviewsForRepo } from '../lib/clear-commit-reviews.js'
 import { DEFAULT_MODEL } from '../lib/defaults.js'
 import { reviewRulesPutData, reviewRulesToApi, type ReviewRulesPutBody } from '../lib/review-llm/api-prompt-fields.js'
 import { DEFAULT_SYSTEM_PROMPT } from '../lib/review-llm/prompt-defaults.js'
+import { buildDefaultReviewPipeline } from '../lib/review-llm/review-pipeline.js'
 import { isProviderId, normalizeProviderId } from '../providers/index.js'
 
 function parseExcludeGlobs(value: unknown): string[] {
@@ -110,6 +111,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
             systemPrompt: DEFAULT_SYSTEM_PROMPT,
             excludeGlobs: [],
             model: modelName,
+            reviewPipeline: buildDefaultReviewPipeline() as Prisma.InputJsonValue,
           },
         })
         return created
@@ -211,7 +213,13 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       req.log.warn({ event: 'rules_put', repoId: req.params.id, outcome: 'not_found' }, 'PUT /repos/:id/rules')
       return reply.code(404).send({ error: 'Not found' })
     }
-    const data = reviewRulesPutData(body)
+    let data: ReturnType<typeof reviewRulesPutData>
+    try {
+      data = reviewRulesPutData(body)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return reply.code(400).send({ error: message })
+    }
     if (Array.isArray(body.excludeGlobs)) {
       data.excludeGlobs = body.excludeGlobs as Prisma.InputJsonValue
     }
@@ -226,6 +234,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         systemPrompt: typeof body.systemPrompt === 'string' ? body.systemPrompt : DEFAULT_SYSTEM_PROMPT,
         excludeGlobs: Array.isArray(body.excludeGlobs) ? body.excludeGlobs : [],
         model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : DEFAULT_MODEL,
+        reviewPipeline: buildDefaultReviewPipeline() as Prisma.InputJsonValue,
         ...data,
       },
       update: data,

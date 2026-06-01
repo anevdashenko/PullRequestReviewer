@@ -6,7 +6,8 @@ services:
       POSTGRES_PASSWORD: prr
       POSTGRES_DB: prr
     ports:
-      - "5432:5432"
+      # Default 15432:5432 — 5432 is often blocked on Windows (Hyper-V reserves ~5147–5846).
+      - "${POSTGRES_HOST_PORT:-15432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,7 +19,8 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      # Default 16379:6379 — 6379 is in the same reserved range on many Windows hosts.
+      - "${REDIS_HOST_PORT:-16379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -31,8 +33,10 @@ services:
       dockerfile: Dockerfile
     command: sh -c "npx prisma migrate deploy && node dist/index.js"
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:${PORT:-3000}"
     environment:
+      PORT: ${PORT:-3000}
+      HOST: ${HOST:-0.0.0.0}
       DATABASE_URL: postgresql://prr:prr@postgres:5432/prr?schema=public
       REDIS_URL: redis://redis:6379
       ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key-change-in-prod}
@@ -67,6 +71,9 @@ services:
       QWEN_CLI_PATH: ${QWEN_CLI_PATH:-qwen}
       QWEN_CLI_TIMEOUT_MS: ${QWEN_CLI_TIMEOUT_MS:-600000}
       QWEN_CLI_EXTRA_ARGS: ${QWEN_CLI_EXTRA_ARGS:-}
+      QWEN_CLI_LOG_INCLUDE_PROMPT: ${QWEN_CLI_LOG_INCLUDE_PROMPT:-}
+      QWEN_CLI_LOG_STREAM: ${QWEN_CLI_LOG_STREAM:-}
+      QWEN_CLI_LOG_MAX_CHARS: ${QWEN_CLI_LOG_MAX_CHARS:-}
       REPO_CACHE_ROOT: /var/cache/prr/repos
       REPO_CACHE_GIT_TIMEOUT_MS: ${REPO_CACHE_GIT_TIMEOUT_MS:-300000}
       REPO_CACHE_FETCH_DEPTH: ${REPO_CACHE_FETCH_DEPTH:-0}

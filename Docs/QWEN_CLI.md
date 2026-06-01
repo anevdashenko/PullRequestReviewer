@@ -113,6 +113,14 @@ Look for JSON fields `event: "qwen_cli_stream"`, `qwen_cli_start`, `qwen_cli_don
 
 Logs are stored in `ReviewLog.qwenCliLog` / `CommitBatchReview.qwenCliLog` (truncated at `QWEN_CLI_LOG_MAX_CHARS`, default 500k).
 
+To include the full prompt sent to `qwen -p` in the DB log (between `--- prompt ---` markers):
+
+```env
+QWEN_CLI_LOG_INCLUDE_PROMPT=true
+```
+
+Default is off (only `prompt_chars` and a redacted command line are stored).
+
 ### On disk (optional)
 
 Per-phase files under `{REPO_CACHE_ROOT}/qwen-logs/{jobId}-{phase}.log` unless `QWEN_CLI_LOG_DIR` is set.

@@ -1,4 +1,5 @@
 import { prisma } from '../db.js'
+import { pollLog } from './logger.js'
 import { pollCommitsForRepository } from '../poll-commits.js'
 import { commitReviewQueue } from '../queue.js'
 
@@ -37,7 +38,16 @@ export async function clearCommitReviewsForRepo(repoId: string): Promise<ClearCo
   })
   const batchIds = new Set(batches.map((b) => b.id))
 
-  await purgeCommitReviewQueueJobs(batchIds)
+  if (batchIds.size > 0) {
+    try {
+      await purgeCommitReviewQueueJobs(batchIds)
+    } catch (err) {
+      pollLog.warn(
+        { err, event: 'commit_reviews_clear_queue_purge_failed', repoId, pendingBatches: batchIds.size },
+        'could not purge commit-review queue jobs (Redis unavailable?) — database rows will still be cleared',
+      )
+    }
+  }
 
   const batchReviews = await prisma.commitBatchReview.deleteMany({ where: { repoId } })
   // ReviewedCommit rows survive batch delete (FK onDelete: SetNull); remove all tracking for this repo.
@@ -45,8 +55,15 @@ export async function clearCommitReviewsForRepo(repoId: string): Promise<ClearCo
 
   let pollScheduled = 0
   if (repo.commitReviewEnabled) {
-    const poll = await pollCommitsForRepository(repoId, { source: 'clear' })
-    pollScheduled = poll.authorsScheduled
+    try {
+      const poll = await pollCommitsForRepository(repoId, { source: 'clear' })
+      pollScheduled = poll.authorsScheduled
+    } catch (err) {
+      pollLog.warn(
+        { err, event: 'commit_reviews_clear_poll_failed', repoId },
+        'commit reviews cleared but post-clear poll failed — next COMMIT_POLL_INTERVAL_MS tick will retry',
+      )
+    }
   }
 
   return {

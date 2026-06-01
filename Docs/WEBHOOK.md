@@ -34,7 +34,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`, set **Admin key** to the same value as `ADMIN_API_KEY`, then add a repository: pick **GitHub** or **GitLab**, enter owner/namespace, repo/project name, access token, and webhook secret.
+Open `http://localhost:3001`, set **Admin key** to the same value as `ADMIN_API_KEY`, then add a repository: pick **GitHub** or **GitLab**, enter owner/namespace, repo/project name, access token, and webhook secret.
 
 ## 3. Expose the API with ngrok
 

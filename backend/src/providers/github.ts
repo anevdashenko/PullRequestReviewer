@@ -135,9 +135,9 @@ export const githubProvider: VcsProvider = {
     return buildPrDiffText(octokit, owner, name, mrNumber, excludeGlobs)
   },
 
-  async submitMrReview(accessToken, owner, name, mrNumber, headSha, ai, requestSizes) {
+  async submitMrReview(accessToken, owner, name, mrNumber, headSha, reviewBody) {
     const octokit = new Octokit({ auth: accessToken })
-    await submitGithubReview(octokit, owner, name, mrNumber, headSha, ai, requestSizes)
+    await submitGithubReview(octokit, owner, name, mrNumber, headSha, reviewBody)
   },
 
   async getDefaultBranch(accessToken, owner, name) {

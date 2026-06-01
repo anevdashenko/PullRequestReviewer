@@ -1,5 +1,5 @@
 import type { FastifyRequest } from 'fastify'
-import type { AiReviewResult, LlmRequestSizes } from '../lib/llm.js'
+import type { LlmRequestSizes } from '../lib/llm.js'
 import type { CommitMessageMeta } from '../lib/commit-diff.js'
 
 export type ProviderId = 'github' | 'gitlab'
@@ -63,8 +63,8 @@ export interface VcsProvider {
     name: string,
     mrNumber: number,
     headSha: string,
-    ai: AiReviewResult,
-    requestSizes: LlmRequestSizes,
+    reviewBody: string,
+    requestSizes?: LlmRequestSizes,
   ): Promise<void>
   getDefaultBranch(accessToken: string, owner: string, name: string): Promise<string | null>
   listBranches(accessToken: string, owner: string, name: string): Promise<string[]>

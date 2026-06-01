@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { workerLog } from '../logger.js'
 import { getRepoCacheRoot } from '../repo-cache/index.js'
 
-export type QwenCliPhase = 'overview' | 'code_review'
+export type QwenCliPhase = string
 
 export type QwenCliLogContext = {
   phase: QwenCliPhase
@@ -26,6 +26,28 @@ export function isQwenCliLogStreamEnabled(): boolean {
   const raw = process.env.QWEN_CLI_LOG_STREAM?.trim().toLowerCase()
   if (!raw) return true
   return raw !== '0' && raw !== 'false' && raw !== 'off' && raw !== 'no'
+}
+
+export function isQwenCliLogIncludePromptEnabled(): boolean {
+  const raw = process.env.QWEN_CLI_LOG_INCLUDE_PROMPT?.trim().toLowerCase()
+  if (!raw) return false
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
+}
+
+export function buildQwenCliLogSectionStart(
+  ctx: QwenCliLogContext,
+  opts: { startedAt: Date; promptChars: number; commandLine: string; prompt?: string },
+): string {
+  const lines = [
+    formatQwenCliSectionHeader(ctx, `started ${opts.startedAt.toISOString()}`),
+    `prompt_chars=${opts.promptChars}`,
+    `command=${opts.commandLine}`,
+  ]
+  if (opts.prompt !== undefined) {
+    lines.push('', '--- prompt ---', opts.prompt, '--- end prompt ---')
+  }
+  lines.push('', '--- stdout ---')
+  return lines.join('\n')
 }
 
 function truncateLog(text: string): string {

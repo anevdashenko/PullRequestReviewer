@@ -2,33 +2,27 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../api'
 
-type PromptDefaults = {
-  systemPrompt: string
-  prOverviewPrompt: string
-  prCodeReviewPrompt: string
-  batchOverviewPrompt: string
-  batchCodeReviewPrompt: string
-  overviewJsonPrompt: string
-  codeReviewJsonPrompt: string
-  overviewJsonSchemaPr: string
-  overviewJsonSchemaBatch: string
-  codeReviewJsonSchema: string
+type ReviewPipelineStep = {
+  id: string
+  name: string
+  enabled: boolean
+  prompt: string
+}
+
+type ReviewPipelineConfig = {
+  version: 1
+  steps: ReviewPipelineStep[]
 }
 
 type RepoRules = {
   systemPrompt: string
   excludeGlobs: string[]
   model: string
-  prOverviewPrompt: string | null
-  prCodeReviewPrompt: string | null
-  batchOverviewPrompt: string | null
-  batchCodeReviewPrompt: string | null
-  overviewJsonPrompt: string | null
-  codeReviewJsonPrompt: string | null
-  batchOverviewJsonPrompt: string | null
-  batchCodeReviewJsonPrompt: string | null
-  jsonSchemaPlaceholder: string
-  defaults: PromptDefaults
+  reviewPipeline: ReviewPipelineConfig
+  defaults: {
+    defaultReviewPipeline: ReviewPipelineConfig
+    systemPrompt: string
+  }
 }
 
 type RepoDetail = {
@@ -38,47 +32,12 @@ type RepoDetail = {
   rules: RepoRules | null
 }
 
-function PromptField({
-  label,
-  hint,
-  value,
-  placeholder,
-  onChange,
-}: {
-  label: string
-  hint?: string
-  value: string
-  placeholder: string
-  onChange: (v: string) => void
-}) {
-  return (
-    <div className="form-field">
-      <label>{label}</label>
-      {hint && <p className="muted small">{hint}</p>}
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        rows={hint?.includes('JSON') ? 6 : 4}
-      />
-    </div>
-  )
-}
-
 export default function RulesPage() {
   const { id } = useParams<{ id: string }>()
   const [repo, setRepo] = useState<RepoDetail | null>(null)
-  const [defaults, setDefaults] = useState<PromptDefaults | null>(null)
-  const [jsonPlaceholder, setJsonPlaceholder] = useState('{{JSON_SCHEMA}}')
+  const [defaultPipeline, setDefaultPipeline] = useState<ReviewPipelineConfig | null>(null)
   const [systemPrompt, setSystemPrompt] = useState('')
-  const [prOverview, setPrOverview] = useState('')
-  const [prCodeReview, setPrCodeReview] = useState('')
-  const [batchOverview, setBatchOverview] = useState('')
-  const [batchCodeReview, setBatchCodeReview] = useState('')
-  const [overviewJson, setOverviewJson] = useState('')
-  const [codeReviewJson, setCodeReviewJson] = useState('')
-  const [batchOverviewJson, setBatchOverviewJson] = useState('')
-  const [batchCodeReviewJson, setBatchCodeReviewJson] = useState('')
+  const [pipelineJson, setPipelineJson] = useState('')
   const [globs, setGlobs] = useState('')
   const [model, setModel] = useState('qwen2.5-coder-7b-instruct')
   const [error, setError] = useState<string | null>(null)
@@ -91,18 +50,9 @@ export default function RulesPage() {
       .then((r) => {
         setRepo(r)
         if (r.rules) {
-          const d = r.rules.defaults
-          setDefaults(d)
-          setJsonPlaceholder(r.rules.jsonSchemaPlaceholder)
+          setDefaultPipeline(r.rules.defaults.defaultReviewPipeline)
           setSystemPrompt(r.rules.systemPrompt)
-          setPrOverview(r.rules.prOverviewPrompt ?? '')
-          setPrCodeReview(r.rules.prCodeReviewPrompt ?? '')
-          setBatchOverview(r.rules.batchOverviewPrompt ?? '')
-          setBatchCodeReview(r.rules.batchCodeReviewPrompt ?? '')
-          setOverviewJson(r.rules.overviewJsonPrompt ?? '')
-          setCodeReviewJson(r.rules.codeReviewJsonPrompt ?? '')
-          setBatchOverviewJson(r.rules.batchOverviewJsonPrompt ?? '')
-          setBatchCodeReviewJson(r.rules.batchCodeReviewJsonPrompt ?? '')
+          setPipelineJson(JSON.stringify(r.rules.reviewPipeline, null, 2))
           setGlobs((r.rules.excludeGlobs ?? []).join('\n'))
           setModel(r.rules.model)
         }
@@ -110,11 +60,24 @@ export default function RulesPage() {
       .catch((e: Error) => setError(e.message))
   }, [id])
 
+  const resetPipelineToDefault = () => {
+    if (defaultPipeline) {
+      setPipelineJson(JSON.stringify(defaultPipeline, null, 2))
+    }
+  }
+
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!id) return
     setError(null)
     setSaved(false)
+    let reviewPipeline: ReviewPipelineConfig
+    try {
+      reviewPipeline = JSON.parse(pipelineJson) as ReviewPipelineConfig
+    } catch {
+      setError('Review pipeline: invalid JSON')
+      return
+    }
     try {
       const excludeGlobs = globs
         .split('\n')
@@ -126,14 +89,7 @@ export default function RulesPage() {
           systemPrompt,
           excludeGlobs,
           model,
-          prOverviewPrompt: prOverview,
-          prCodeReviewPrompt: prCodeReview,
-          batchOverviewPrompt: batchOverview,
-          batchCodeReviewPrompt: batchCodeReview,
-          overviewJsonPrompt: overviewJson,
-          codeReviewJsonPrompt: codeReviewJson,
-          batchOverviewJsonPrompt: batchOverviewJson,
-          batchCodeReviewJsonPrompt: batchCodeReviewJson,
+          reviewPipeline,
         }),
       })
       setSaved(true)
@@ -143,8 +99,6 @@ export default function RulesPage() {
   }
 
   if (!id) return <p>Missing id</p>
-
-  const ph = defaults
 
   return (
     <>
@@ -164,68 +118,27 @@ export default function RulesPage() {
         <input value={model} onChange={(e) => setModel(e.target.value)} />
 
         <h2>Repository rules</h2>
-        <p className="muted small">Appended to every review phase as &quot;Repository rules&quot;.</p>
+        <p className="muted small">Appended to every review pipeline step as &quot;Repository rules&quot;.</p>
         <textarea value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} required rows={3} />
 
-        <h2>PR review prompts</h2>
-        <PromptField
-          label="Overview (system)"
-          value={prOverview}
-          onChange={setPrOverview}
-          placeholder={ph?.prOverviewPrompt ?? ''}
-        />
-        <PromptField
-          label="Code review (system)"
-          value={prCodeReview}
-          onChange={setPrCodeReview}
-          placeholder={ph?.prCodeReviewPrompt ?? ''}
-        />
-
-        <h2>Commit batch review prompts</h2>
-        <p className="muted small">Used for commit poll / batch reviews (not pull requests).</p>
-        <PromptField
-          label="Overview (system)"
-          value={batchOverview}
-          onChange={setBatchOverview}
-          placeholder={ph?.batchOverviewPrompt ?? ''}
-        />
-        <PromptField
-          label="Code review (system)"
-          value={batchCodeReview}
-          onChange={setBatchCodeReview}
-          placeholder={ph?.batchCodeReviewPrompt ?? ''}
-        />
-
-        <h2>JSON response templates</h2>
+        <h2>Review pipeline (JSON)</h2>
         <p className="muted small">
-          Include <code>{jsonPlaceholder}</code> where the response shape should go — the app substitutes the
-          schema required for parsing (PR vs batch overview schemas differ).
+          Steps run sequentially via Qwen CLI after the repo workspace is synced. Each enabled step becomes a
+          separate section in the review comment. Default template:{' '}
+          <code>config/review-pipeline.default.json</code>
         </p>
-        <PromptField
-          label="Overview JSON (PR and default for batch)"
-          hint={`PR schema example: ${ph?.overviewJsonSchemaPr.slice(0, 80)}…`}
-          value={overviewJson}
-          onChange={setOverviewJson}
-          placeholder={ph?.overviewJsonPrompt ?? ''}
+        <textarea
+          value={pipelineJson}
+          onChange={(e) => setPipelineJson(e.target.value)}
+          rows={24}
+          className="mono"
+          spellCheck={false}
         />
-        <PromptField
-          label="Overview JSON (batch only, optional)"
-          value={batchOverviewJson}
-          onChange={setBatchOverviewJson}
-          placeholder={ph?.overviewJsonPrompt ?? 'Leave empty to use overview JSON above'}
-        />
-        <PromptField
-          label="Code review JSON (PR and default for batch)"
-          value={codeReviewJson}
-          onChange={setCodeReviewJson}
-          placeholder={ph?.codeReviewJsonPrompt ?? ''}
-        />
-        <PromptField
-          label="Code review JSON (batch only, optional)"
-          value={batchCodeReviewJson}
-          onChange={setBatchCodeReviewJson}
-          placeholder={ph?.codeReviewJsonPrompt ?? 'Leave empty to use code review JSON above'}
-        />
+        <p>
+          <button type="button" className="secondary" onClick={resetPipelineToDefault} disabled={!defaultPipeline}>
+            Reset pipeline to default
+          </button>
+        </p>
 
         <h2>Diff filters</h2>
         <label>Exclude file globs (one per line, e.g. <code>*.lock</code>)</label>

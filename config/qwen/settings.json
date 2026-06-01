@@ -2,11 +2,14 @@
   "modelProviders": {
     "openai": [
       {
-        "id": "deepseek-coder-v2-lite-instruct-mlx",
-        "name": "deepseek-coder-v2-lite-instruct-mlx",
-        "baseUrl": "http://host.docker.internal:1234/v1",
+        "id": "qwen3.6-27b-mlx",
+        "name": "qwen3.6-27b-mlx",
+        "baseUrl": "http://192.168.0.123:1234/v1",
         "description": "Local OpenAI-compatible server (LM Studio, vLLM, etc.)",
-        "envKey": "OPENAI_API_KEY"
+        "envKey": "OPENAI_API_KEY",
+        "generationConfig": {
+          "timeout": 600000
+        }
       }
     ]
   },
@@ -16,6 +19,6 @@
     }
   },
   "model": {
-    "name": "deepseek-coder-v2-lite-instruct-mlx"
+    "name": "qwen3.6-27b-mlx"
   }
 }
